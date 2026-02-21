@@ -6,9 +6,9 @@ The typical setup: you build on a Linux server but have your Android device plug
 
 ## Scripts
 
-### `apk-listener.sh` + `push-apk.sh` — Push-based install
+### `apk_listener.py` + `push-apk.sh` — Push-based install (TUI)
 
-A two-part system where the build machine pushes installs to your Mac automatically.
+A two-part system where the build machine pushes installs to your Mac automatically. The Python TUI gives you dedicated panels for connection status, active transfers with live progress bars, and a scrolling event log — all updating simultaneously.
 
 **How it works:**
 1. Your Mac opens an SSH tunnel to the build server and watches a named pipe (FIFO)
@@ -16,6 +16,39 @@ A two-part system where the build machine pushes installs to your Mac automatica
 3. The Mac picks it up, `rsync`s the APK back through the SSH tunnel, and runs `adb install`
 
 No open ports required — everything runs over your existing SSH keys.
+
+**On your Mac:**
+```bash
+# With uv (auto-installs dependencies):
+uv run apk_listener.py
+
+# Or with pip:
+pip install textual && python3 apk_listener.py
+```
+
+```
+┌─ APK Listener ──────────────────────────────────────────┐
+│ ● Connected  ssilver@192.168.1.138                      │
+├─────────────────────────────────────────────────────────┤
+│ APK                Progress                 Status      │
+│ app-debug      ━━━━━━━━━━━━━━━╸░░░ 78%    pulling      │
+│ app-release    ━━━━━━━━━━━━━━━━━━━ 100%   installing   │
+├─────────────────────────────────────────────────────────┤
+│ 14:30:01  Tunnel up                                     │
+│ 14:30:01  FIFO ready on remote                          │
+│ 14:30:15  [app-debug] Pulling...                        │
+│ 14:30:18  [app-debug] Pulled 42.3 MB                    │
+│ 14:30:22  [app-debug] Installed                         │
+├─────────────────────────────────────────────────────────┤
+│ q Quit                                                  │
+└─────────────────────────────────────────────────────────┘
+```
+
+Multiple APKs download in parallel with live progress bars. Installs are serialized (the device handles one at a time). SSH reconnects automatically with exponential backoff if the connection drops.
+
+### `apk-listener.sh` + `push-apk.sh` — Push-based install (bash fallback)
+
+The original bash version — same functionality as the TUI but output is a flat scrolling log.
 
 **On your Mac:**
 ```bash
@@ -86,4 +119,5 @@ Edit the variables at the top of each script:
 ## Requirements
 
 - **Mac side:** `rsync`, `adb` (Android SDK), SSH key access to the build machine
+- **Mac side (TUI only):** Python 3.10+, [`textual`](https://textual.textualize.io/) (or just use [`uv`](https://docs.astral.sh/uv/) which handles dependencies automatically)
 - **Build machine side:** `rsync`, `ssh`, `curl` (for self-update), standard coreutils
