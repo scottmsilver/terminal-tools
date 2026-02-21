@@ -37,12 +37,27 @@ ensure_ssh() {
     if ssh -S "$SOCK" -O check "$REMOTE" 2>/dev/null; then
         return
     fi
-    ts; echo -e "${BLUE}Opening SSH tunnel to ${REMOTE}...${NC}"
-    ssh -M -S "$SOCK" -fN \
-        -o ServerAliveInterval=60 \
-        -o ServerAliveCountMax=3 \
-        "$REMOTE"
-    ts; echo -e "${GREEN}✓ Tunnel up${NC}"
+
+    # clean up stale socket
+    ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
+    rm -f "$SOCK"
+
+    local delay=1
+    while true; do
+        ts; echo -e "${BLUE}Connecting to ${REMOTE}...${NC}"
+        if ssh -M -S "$SOCK" -fN \
+            -o ConnectTimeout=5 \
+            -o ServerAliveInterval=15 \
+            -o ServerAliveCountMax=3 \
+            "$REMOTE" 2>/dev/null; then
+            ts; echo -e "${GREEN}✓ Tunnel up${NC}"
+            return
+        fi
+
+        ts; echo -e "${YELLOW}Connection failed, retrying in ${delay}s...${NC}"
+        sleep "$delay"
+        delay=$(( delay < 30 ? delay * 2 : 30 ))
+    done
 }
 
 # ── banner ──────────────────────────────────────────────
@@ -57,31 +72,40 @@ echo -e "  ${YELLOW}./push-apk.sh path/to/app.apk${NC}"
 echo -e "${DIM}  ─────────────────────────────────────${NC}"
 echo ""
 
-# ── setup ───────────────────────────────────────────────
-ensure_ssh
-ssh -S "$SOCK" "$REMOTE" "[ -p '$FIFO' ] || mkfifo '$FIFO'"
-ts; echo -e "${GREEN}✓ FIFO ready on remote${NC}"
+setup_remote() {
+    ssh -S "$SOCK" "$REMOTE" "[ -p '$FIFO' ] || mkfifo '$FIFO'" 2>/dev/null
+    ts; echo -e "${GREEN}✓ FIFO ready on remote${NC}"
 
-# sync push-apk.sh to build machine
-ssh -S "$SOCK" "$REMOTE" "mkdir -p $REMOTE_SCRIPT_DIR"
-if rsync -a -e "ssh -S '$SOCK'" \
-     "$SCRIPT_DIR/push-apk.sh" "$REMOTE:$REMOTE_SCRIPT_DIR/push-apk.sh"; then
-    ts; echo -e "${GREEN}✓ push-apk.sh synced to ${REMOTE_SCRIPT_DIR}${NC}"
-else
-    ts; echo -e "${YELLOW}⚠ Could not sync push-apk.sh (non-fatal)${NC}"
-fi
-echo ""
+    # sync push-apk.sh to build machine
+    ssh -S "$SOCK" "$REMOTE" "mkdir -p $REMOTE_SCRIPT_DIR" 2>/dev/null
+    if rsync -a -e "ssh -S '$SOCK'" \
+         "$SCRIPT_DIR/push-apk.sh" "$REMOTE:$REMOTE_SCRIPT_DIR/push-apk.sh" 2>/dev/null; then
+        ts; echo -e "${GREEN}✓ push-apk.sh synced to ${REMOTE_SCRIPT_DIR}${NC}"
+    else
+        ts; echo -e "${YELLOW}⚠ Could not sync push-apk.sh (non-fatal)${NC}"
+    fi
+}
+
+NEEDS_SETUP=true
 
 # ── main loop ───────────────────────────────────────────
 while true; do
     ensure_ssh
+
+    if $NEEDS_SETUP; then
+        setup_remote
+        NEEDS_SETUP=false
+        echo ""
+    fi
+
     ts; echo "Waiting for APK..."
 
     # blocks until the remote push-apk.sh writes a path into the FIFO
     apk_path=$(ssh -S "$SOCK" "$REMOTE" "cat '$FIFO'" 2>/dev/null) || {
-        ts; echo -e "${YELLOW}SSH read interrupted, reconnecting...${NC}"
+        ts; echo -e "${YELLOW}Connection lost, reconnecting...${NC}"
         ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
-        sleep 2
+        rm -f "$SOCK"
+        NEEDS_SETUP=true
         continue
     }
 
@@ -93,13 +117,25 @@ while true; do
     # ── pull ────────────────────────────────────────────
     ts; echo -e "${BLUE}↓ Pulling${NC} ${BOLD}${filename}${NC}"
 
-    if rsync -ah --progress -e "ssh -S '$SOCK'" \
-         "$REMOTE:$apk_path" "/tmp/$filename"; then
-        size=$(stat -f%z "/tmp/$filename" 2>/dev/null || echo 0)
-        ts; echo -e "${GREEN}✓ Pulled${NC}  $(human_size "$size")"
-    else
-        ts; echo -e "${RED}✗ rsync failed${NC}"
+    pull_ok=false
+    for attempt in 1 2 3; do
+        if rsync -ah --progress -e "ssh -S '$SOCK'" \
+             "$REMOTE:$apk_path" "/tmp/$filename"; then
+            size=$(stat -f%z "/tmp/$filename" 2>/dev/null || echo 0)
+            ts; echo -e "${GREEN}✓ Pulled${NC}  $(human_size "$size")"
+            pull_ok=true
+            break
+        fi
+        ts; echo -e "${YELLOW}rsync failed (attempt ${attempt}/3), reconnecting...${NC}"
+        ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
+        rm -f "$SOCK"
+        ensure_ssh
+    done
+
+    if ! $pull_ok; then
+        ts; echo -e "${RED}✗ Could not pull APK after 3 attempts${NC}"
         echo ""
+        NEEDS_SETUP=true
         continue
     fi
 
