@@ -131,16 +131,21 @@ process_apk() {
 
     # ── install (serialized via lock) ──────────────────
     ts; echo -e "${BLUE}⏳${NC} ${BOLD}[${tag}]${NC} Installing..."
-    (
-        flock -x 200
-        if "$ADB" install -r "/tmp/$filename" 2>&1 | while IFS= read -r line; do
-            echo -e "           ${DIM}[${tag}] ${line}${NC}"
-        done; then
-            ts; echo -e "${GREEN}✓${NC} ${BOLD}[${tag}]${NC} Installed"
-        else
-            ts; echo -e "${RED}✗${NC} ${BOLD}[${tag}]${NC} Install failed"
-        fi
-    ) 200>"$INSTALL_LOCK"
+
+    # spin until we grab the lock
+    while ! shlock -p $$ -f "$INSTALL_LOCK" 2>/dev/null; do
+        sleep 0.5
+    done
+
+    if "$ADB" install -r "/tmp/$filename" 2>&1 | while IFS= read -r line; do
+        echo -e "           ${DIM}[${tag}] ${line}${NC}"
+    done; then
+        ts; echo -e "${GREEN}✓${NC} ${BOLD}[${tag}]${NC} Installed"
+    else
+        ts; echo -e "${RED}✗${NC} ${BOLD}[${tag}]${NC} Install failed"
+    fi
+
+    rm -f "$INSTALL_LOCK"
 }
 
 NEEDS_SETUP=true
