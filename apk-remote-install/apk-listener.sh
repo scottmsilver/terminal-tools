@@ -31,7 +31,7 @@ BG_PIDS=()
 cleanup() {
     printf "\n"
     # wait for in-flight jobs
-    for pid in "${BG_PIDS[@]}"; do
+    for pid in "${BG_PIDS[@]+"${BG_PIDS[@]}"}"; do
         kill -0 "$pid" 2>/dev/null && {
             echo -e "${DIM}Waiting for job $pid to finish...${NC}"
             wait "$pid" 2>/dev/null || true
@@ -47,7 +47,7 @@ trap cleanup INT TERM EXIT
 # reap finished background jobs so BG_PIDS doesn't grow forever
 reap_jobs() {
     local still_running=()
-    for pid in "${BG_PIDS[@]}"; do
+    for pid in "${BG_PIDS[@]+"${BG_PIDS[@]}"}"; do
         if kill -0 "$pid" 2>/dev/null; then
             still_running+=("$pid")
         else
