@@ -2,6 +2,8 @@
 set -euo pipefail
 
 FIFO="/tmp/apk-push-pipe"
+SELF_URL="https://raw.githubusercontent.com/scottmsilver/agent-tools/main/apk-remote-install/push-apk.sh"
+SCRIPT_PATH=$(realpath "$0")
 
 # ── colors ──────────────────────────────────────────────
 GREEN='\033[0;32m'  RED='\033[0;31m'  BLUE='\033[0;34m'
@@ -17,6 +19,28 @@ human_size() {
         else                     printf \"%.1f GB\", b/1073741824
     }"
 }
+
+# ── self-update ─────────────────────────────────────────
+self_update() {
+    local tmp
+    tmp=$(mktemp)
+    if curl -sf --connect-timeout 3 "$SELF_URL" -o "$tmp"; then
+        if ! cmp -s "$tmp" "$SCRIPT_PATH"; then
+            mv "$tmp" "$SCRIPT_PATH"
+            chmod +x "$SCRIPT_PATH"
+            echo -e "  ${GREEN}✓${NC} Updated to latest version, re-running..."
+            echo ""
+            exec "$SCRIPT_PATH" "--skip-update" "$@"
+        fi
+        rm -f "$tmp"
+    fi
+}
+
+if [[ "${1:-}" != "--skip-update" ]]; then
+    self_update "$@"
+else
+    shift  # drop the --skip-update flag
+fi
 
 # ── usage ───────────────────────────────────────────────
 if [[ $# -lt 1 ]]; then

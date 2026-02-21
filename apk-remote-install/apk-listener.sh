@@ -2,9 +2,11 @@
 set -euo pipefail
 
 REMOTE="ssilver@192.168.1.138"
+REMOTE_SCRIPT_DIR="~/scripts"
 FIFO="/tmp/apk-push-pipe"
 SOCK="/tmp/apk-listener-ssh.sock"
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 # ── colors ──────────────────────────────────────────────
 GREEN='\033[0;32m'  BLUE='\033[0;34m'   RED='\033[0;31m'
@@ -59,6 +61,15 @@ echo ""
 ensure_ssh
 ssh -S "$SOCK" "$REMOTE" "[ -p '$FIFO' ] || mkfifo '$FIFO'"
 ts; echo -e "${GREEN}✓ FIFO ready on remote${NC}"
+
+# sync push-apk.sh to build machine
+ssh -S "$SOCK" "$REMOTE" "mkdir -p $REMOTE_SCRIPT_DIR"
+if rsync -a -e "ssh -S '$SOCK'" \
+     "$SCRIPT_DIR/push-apk.sh" "$REMOTE:$REMOTE_SCRIPT_DIR/push-apk.sh"; then
+    ts; echo -e "${GREEN}✓ push-apk.sh synced to ${REMOTE_SCRIPT_DIR}${NC}"
+else
+    ts; echo -e "${YELLOW}⚠ Could not sync push-apk.sh (non-fatal)${NC}"
+fi
 echo ""
 
 # ── main loop ───────────────────────────────────────────

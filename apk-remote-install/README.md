@@ -44,6 +44,10 @@ No open ports required — everything runs over your existing SSH keys.
 
 The write to the FIFO blocks until the Mac listener reads it, so when the script completes you know the Mac has started pulling. You can also call this from a build script to auto-install after every build.
 
+**Auto-update:** `push-apk.sh` keeps itself up to date automatically:
+- Every time the Mac listener starts, it syncs the latest `push-apk.sh` to `~/scripts/` on the build machine.
+- Every time `push-apk.sh` runs, it checks GitHub for a newer version and replaces itself before proceeding.
+
 ### `apk-install.sh` — Pull-based install (manual)
 
 A simpler standalone script you run on the Mac when you want to manually pull and install an APK.
@@ -77,8 +81,9 @@ Edit the variables at the top of each script:
 | `ADB` | listener, install | `$HOME/Library/Android/sdk/platform-tools/adb` | Path to `adb` |
 | `FIFO` | listener, push | `/tmp/apk-push-pipe` | Named pipe path on the build machine |
 | `SOCK` | listener | `/tmp/apk-listener-ssh.sock` | SSH multiplexing socket path |
+| `REMOTE_SCRIPT_DIR` | listener | `~/scripts` | Where to sync `push-apk.sh` on the build machine |
 
 ## Requirements
 
 - **Mac side:** `rsync`, `adb` (Android SDK), SSH key access to the build machine
-- **Build machine side:** `rsync`, `ssh`, standard coreutils
+- **Build machine side:** `rsync`, `ssh`, `curl` (for self-update), standard coreutils
