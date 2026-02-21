@@ -3,7 +3,7 @@ set -euo pipefail
 
 FIFO="/tmp/apk-push-pipe"
 SELF_URL="https://raw.githubusercontent.com/scottmsilver/agent-tools/main/apk-remote-install/push-apk.sh"
-SCRIPT_PATH=$(realpath "$0")
+SCRIPT_PATH=$(realpath "$0" 2>/dev/null || readlink -f "$0" 2>/dev/null || echo "$0")
 
 # ── colors ──────────────────────────────────────────────
 GREEN='\033[0;32m'  RED='\033[0;31m'  BLUE='\033[0;34m'

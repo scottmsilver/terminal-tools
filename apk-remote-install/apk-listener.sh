@@ -26,6 +26,7 @@ human_size() {
 }
 
 INSTALL_LOCK="/tmp/apk-install.lock"
+rm -rf "$INSTALL_LOCK"   # clean up stale lock from previous run
 BG_PIDS=()
 
 cleanup() {
@@ -39,7 +40,7 @@ cleanup() {
     done
     echo -e "${DIM}Tearing down SSH tunnel...${NC}"
     ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
-    rm -f "$INSTALL_LOCK"
+    rm -rf "$INSTALL_LOCK"
     exit 0
 }
 trap cleanup INT TERM EXIT
@@ -129,11 +130,11 @@ process_apk() {
     size=$(stat -f%z "/tmp/$filename" 2>/dev/null || echo 0)
     ts; echo -e "${GREEN}✓${NC} ${BOLD}[${tag}]${NC} Pulled $(human_size "$size")"
 
-    # ── install (serialized via lock) ──────────────────
+    # ── install (serialized via mkdir lock) ──────────────
     ts; echo -e "${BLUE}⏳${NC} ${BOLD}[${tag}]${NC} Installing..."
 
-    # spin until we grab the lock
-    while ! shlock -p $$ -f "$INSTALL_LOCK" 2>/dev/null; do
+    # mkdir is atomic — only one process succeeds
+    while ! mkdir "$INSTALL_LOCK" 2>/dev/null; do
         sleep 0.5
     done
 
@@ -145,7 +146,7 @@ process_apk() {
         ts; echo -e "${RED}✗${NC} ${BOLD}[${tag}]${NC} Install failed"
     fi
 
-    rm -f "$INSTALL_LOCK"
+    rmdir "$INSTALL_LOCK" 2>/dev/null || true
 }
 
 NEEDS_SETUP=true
