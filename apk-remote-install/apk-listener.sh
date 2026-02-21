@@ -25,13 +25,37 @@ human_size() {
     }"
 }
 
+INSTALL_LOCK="/tmp/apk-install.lock"
+BG_PIDS=()
+
 cleanup() {
     printf "\n"
+    # wait for in-flight jobs
+    for pid in "${BG_PIDS[@]}"; do
+        kill -0 "$pid" 2>/dev/null && {
+            echo -e "${DIM}Waiting for job $pid to finish...${NC}"
+            wait "$pid" 2>/dev/null || true
+        }
+    done
     echo -e "${DIM}Tearing down SSH tunnel...${NC}"
     ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
+    rm -f "$INSTALL_LOCK"
     exit 0
 }
 trap cleanup INT TERM EXIT
+
+# reap finished background jobs so BG_PIDS doesn't grow forever
+reap_jobs() {
+    local still_running=()
+    for pid in "${BG_PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            still_running+=("$pid")
+        else
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    BG_PIDS=("${still_running[@]+"${still_running[@]}"}")
+}
 
 ensure_ssh() {
     if ssh -S "$SOCK" -O check "$REMOTE" 2>/dev/null; then
@@ -86,6 +110,39 @@ setup_remote() {
     fi
 }
 
+# ── process one APK (runs in background) ───────────────
+process_apk() {
+    local apk_path="$1"
+    local filename tag size
+    filename=$(basename "$apk_path")
+    tag="${filename%.apk}"
+
+    # ── pull (parallel) ────────────────────────────────
+    ts; echo -e "${BLUE}↓${NC} ${BOLD}[${tag}]${NC} Pulling..."
+
+    if ! rsync -ah --progress -e "ssh -S '$SOCK'" \
+         "$REMOTE:$apk_path" "/tmp/$filename" 2>/dev/null; then
+        ts; echo -e "${RED}✗${NC} ${BOLD}[${tag}]${NC} Pull failed"
+        return 1
+    fi
+
+    size=$(stat -f%z "/tmp/$filename" 2>/dev/null || echo 0)
+    ts; echo -e "${GREEN}✓${NC} ${BOLD}[${tag}]${NC} Pulled $(human_size "$size")"
+
+    # ── install (serialized via lock) ──────────────────
+    ts; echo -e "${BLUE}⏳${NC} ${BOLD}[${tag}]${NC} Installing..."
+    (
+        flock -x 200
+        if "$ADB" install -r "/tmp/$filename" 2>&1 | while IFS= read -r line; do
+            echo -e "           ${DIM}[${tag}] ${line}${NC}"
+        done; then
+            ts; echo -e "${GREEN}✓${NC} ${BOLD}[${tag}]${NC} Installed"
+        else
+            ts; echo -e "${RED}✗${NC} ${BOLD}[${tag}]${NC} Install failed"
+        fi
+    ) 200>"$INSTALL_LOCK"
+}
+
 NEEDS_SETUP=true
 
 # ── main loop ───────────────────────────────────────────
@@ -98,6 +155,7 @@ while true; do
         echo ""
     fi
 
+    reap_jobs
     ts; echo "Waiting for APK..."
 
     # blocks until the remote push-apk.sh writes a path into the FIFO
@@ -112,41 +170,7 @@ while true; do
     apk_path=$(echo "$apk_path" | tr -d '\r\n')
     [[ -z "$apk_path" ]] && continue
 
-    filename=$(basename "$apk_path")
-
-    # ── pull ────────────────────────────────────────────
-    ts; echo -e "${BLUE}↓ Pulling${NC} ${BOLD}${filename}${NC}"
-
-    pull_ok=false
-    for attempt in 1 2 3; do
-        if rsync -ah --progress -e "ssh -S '$SOCK'" \
-             "$REMOTE:$apk_path" "/tmp/$filename"; then
-            size=$(stat -f%z "/tmp/$filename" 2>/dev/null || echo 0)
-            ts; echo -e "${GREEN}✓ Pulled${NC}  $(human_size "$size")"
-            pull_ok=true
-            break
-        fi
-        ts; echo -e "${YELLOW}rsync failed (attempt ${attempt}/3), reconnecting...${NC}"
-        ssh -S "$SOCK" -O exit "$REMOTE" 2>/dev/null || true
-        rm -f "$SOCK"
-        ensure_ssh
-    done
-
-    if ! $pull_ok; then
-        ts; echo -e "${RED}✗ Could not pull APK after 3 attempts${NC}"
-        echo ""
-        NEEDS_SETUP=true
-        continue
-    fi
-
-    # ── install ─────────────────────────────────────────
-    ts; echo -e "${BLUE}⏳ Installing via adb...${NC}"
-    if "$ADB" install -r "/tmp/$filename" 2>&1 | while IFS= read -r line; do
-        echo -e "           ${DIM}${line}${NC}"
-    done; then
-        ts; echo -e "${GREEN}✓ Installed successfully${NC}"
-    else
-        ts; echo -e "${RED}✗ adb install failed${NC}"
-    fi
-    echo ""
+    # fork into background — main loop is immediately free for the next push
+    process_apk "$apk_path" &
+    BG_PIDS+=($!)
 done
