@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["textual>=0.40.0"]
+# dependencies = ["textual>=0.40.0", "rich>=13.0.0"]
 # ///
 """
 APK Listener TUI — watches a remote FIFO for APK paths, pulls them via rsync,
@@ -16,7 +16,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
+import shutil
+import stat
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum, auto
 from pathlib import Path
 
@@ -25,10 +31,11 @@ from rich.table import Table
 from rich.text import Text
 from rich.progress_bar import ProgressBar
 from textual import work
-from textual.app import App, ComposeResult
+from textual.app import App, Binding, ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, RichLog, Static
+from textual.screen import Screen
+from textual.widgets import Footer, Header, Input, OptionList, RichLog, Static
 from textual.worker import Worker
 
 # ── Configuration ────────────────────────────────────────────────────────────
@@ -42,6 +49,8 @@ class Config:
     fifo: str = "/tmp/apk-push-pipe"
     sock: str = "/tmp/apk-listener-ssh.sock"
     adb: str = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
+    password: str = ""
+    device: str = ""
     backoff_initial: float = 1.0
     backoff_max: float = 30.0
 
@@ -137,6 +146,59 @@ class TransferTable(Static):
         return table
 
 
+# ── Password Screen ─────────────────────────────────────────────────────────
+
+class PasswordScreen(Screen):
+    """Startup screen that optionally collects an SSH password."""
+
+    BINDINGS = [("escape", "skip", "Skip (use key-based auth)")]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "Enter SSH password for the remote host, or press Enter/Escape to skip "
+            "(key-based auth).",
+            id="pw-prompt",
+        )
+        yield Input(placeholder="Press Enter to skip", password=True, id="pw-input")
+
+    def on_mount(self) -> None:
+        self.query_one("#pw-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value)
+
+    def action_skip(self) -> None:
+        self.dismiss("")
+
+
+class DeviceScreen(Screen):
+    """Startup screen for selecting an ADB device when multiple are connected."""
+
+    BINDINGS = [("escape", "skip", "Skip")]
+
+    def __init__(self, devices: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._devices = devices
+
+    def compose(self) -> ComposeResult:
+        yield Static("Multiple ADB devices connected. Select one:", id="dev-prompt")
+        options = []
+        for serial, desc in self._devices:
+            label = f"{serial}  {desc}" if desc else serial
+            options.append(label)
+        yield OptionList(*options, id="dev-list")
+
+    def on_mount(self) -> None:
+        self.query_one("#dev-list", OptionList).focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        serial = self._devices[event.option_index][0]
+        self.dismiss(serial)
+
+    def action_skip(self) -> None:
+        self.dismiss("")
+
+
 # ── Main Application ─────────────────────────────────────────────────────────
 
 class ApkListenerApp(App):
@@ -163,6 +225,8 @@ class ApkListenerApp(App):
     """
 
     BINDINGS = [
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+z", "quit", "Quit", show=False, priority=True),
         ("q", "quit", "Quit"),
         ("up", "select_prev", "Prev"),
         ("down", "select_next", "Next"),
@@ -175,6 +239,7 @@ class ApkListenerApp(App):
         self.transfers: dict[str, Transfer] = {}
         self._install_lock = asyncio.Lock()
         self._transfer_counter = 0
+        self._askpass_path: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -185,16 +250,156 @@ class ApkListenerApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.push_screen(PasswordScreen(), callback=self._on_password_entered)
+
+    def _on_password_entered(self, password: str) -> None:
+        """Called when the password screen is dismissed."""
+        if password:
+            self.cfg.password = password
+            self._setup_askpass()
         self.log_event("Starting APK Listener...")
         self.log_event(f"Remote: {self.cfg.remote}")
         self.log_event(f"FIFO: {self.cfg.fifo}")
+        if not self._check_dependencies():
+            return
+        self._detect_devices()
+
+    def _check_dependencies(self) -> bool:
+        """Verify required external tools are available. Returns False if fatal."""
+        ok = True
+
+        # PATH-based tools
+        for tool in ("ssh", "rsync", "script"):
+            path = shutil.which(tool)
+            if path:
+                self.log_event(f"[dim]Found {tool}: {path}[/dim]")
+            else:
+                self.log_event(f"[red]Required tool not found: {tool}[/red]")
+                ok = False
+
+        # adb — check configured path, env-based SDK dirs, well-known
+        # install locations, then PATH
+        adb_found = self._find_adb()
+        if adb_found:
+            if adb_found != self.cfg.adb:
+                self.log_event(f"[yellow]adb: using {adb_found}[/yellow]")
+                self.cfg.adb = adb_found
+            else:
+                self.log_event(f"[dim]Found adb: {adb_found}[/dim]")
+        else:
+            self.log_event("[red]adb not found[/red]")
+            ok = False
+
+        if not ok:
+            self.log_event(
+                "[red bold]Missing dependencies — cannot continue. "
+                "Press q to quit.[/red bold]"
+            )
+        return ok
+
+    def _find_adb(self) -> str | None:
+        """Search for adb: configured path, env vars, well-known dirs, PATH."""
+        # Configured path first
+        if os.path.isfile(self.cfg.adb) and os.access(self.cfg.adb, os.X_OK):
+            return self.cfg.adb
+
+        home = Path.home()
+        sdk_roots: list[Path] = []
+        for var in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+            val = os.environ.get(var)
+            if val:
+                sdk_roots.append(Path(val))
+
+        sdk_roots.extend([
+            home / "Library" / "Android" / "sdk",          # macOS (Android Studio)
+            home / "Android" / "Sdk",                      # Linux (Android Studio)
+            Path("/usr/local/lib/android/sdk"),             # CI images
+        ])
+
+        for root in sdk_roots:
+            candidate = root / "platform-tools" / "adb"
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+
+        # Last resort: PATH
+        return shutil.which("adb")
+
+    @work(exclusive=False, thread=False)
+    async def _detect_devices(self) -> None:
+        """Detect ADB devices, prompt if needed, then start SSH manager."""
+        devices = await self._list_adb_devices()
+        if not devices:
+            self.log_event(
+                "[yellow]No ADB devices found — will retry at install time[/yellow]"
+            )
+            self._run_ssh_manager()
+        elif len(devices) == 1:
+            serial, desc = devices[0]
+            self.cfg.device = serial
+            label = f"{serial} ({desc})" if desc else serial
+            self.log_event(f"[dim]Using device: {label}[/dim]")
+            self._run_ssh_manager()
+        else:
+            self.log_event(f"Found {len(devices)} ADB devices")
+            self.push_screen(
+                DeviceScreen(devices), callback=self._on_device_selected,
+            )
+
+    def _on_device_selected(self, serial: str) -> None:
+        """Called when the device screen is dismissed."""
+        if serial:
+            self.cfg.device = serial
+            self.log_event(f"Using device: {serial}")
+        else:
+            self.log_event("[yellow]No device selected — will use default[/yellow]")
         self._run_ssh_manager()
+
+    async def _list_adb_devices(self) -> list[tuple[str, str]]:
+        """Run ``adb devices -l`` and return [(serial, description), ...]."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self.cfg.adb, "devices", "-l",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+        except FileNotFoundError:
+            return []
+
+        devices: list[tuple[str, str]] = []
+        for line in stdout.decode().splitlines():
+            if not line.strip() or line.startswith("List of"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "device":
+                serial = parts[0]
+                # Remaining tokens are key:value pairs like model:Pixel_7
+                desc = " ".join(parts[2:])
+                devices.append((serial, desc))
+        return devices
+
+    def _setup_askpass(self) -> None:
+        """Write a temporary SSH_ASKPASS script that echoes the password."""
+        fd, path = tempfile.mkstemp(prefix="apk-askpass-")
+        with os.fdopen(fd, "w") as f:
+            f.write(f"#!/bin/sh\necho {shlex.quote(self.cfg.password)}\n")
+        os.chmod(path, stat.S_IRWXU)  # mode 700
+        self._askpass_path = path
+
+    def _ssh_env(self) -> dict[str, str] | None:
+        """Return env dict for SSH_ASKPASS auth, or None for key-based auth."""
+        if not self._askpass_path:
+            return None
+        env = os.environ.copy()
+        env["SSH_ASKPASS"] = self._askpass_path
+        env["SSH_ASKPASS_REQUIRE"] = "force"
+        env["DISPLAY"] = env.get("DISPLAY", ":0")
+        return env
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
     def log_event(self, msg: str) -> None:
         """Append a timestamped line to the event log."""
-        from datetime import datetime
         ts = datetime.now().strftime("%H:%M:%S")
         self.query_one("#log", RichLog).write(f"[dim]{ts}[/dim]  {msg}")
 
@@ -227,6 +432,17 @@ class ApkListenerApp(App):
             table.selected = min(table.selected, max(0, len(self.transfers) - 1))
             table.refresh()
         self.set_timer(after, _remove)
+
+    @contextmanager
+    def _track_proc(self, key: str, proc: asyncio.subprocess.Process):
+        """Register a subprocess with a transfer so it can be cancelled."""
+        if key in self.transfers:
+            self.transfers[key].proc = proc
+        try:
+            yield
+        finally:
+            if key in self.transfers:
+                self.transfers[key].proc = None
 
     # ── Selection & Cancel ───────────────────────────────────────────────
 
@@ -304,10 +520,7 @@ class ApkListenerApp(App):
             await proc.wait()
         except Exception:
             pass
-        try:
-            os.unlink(self.cfg.sock)
-        except FileNotFoundError:
-            pass
+        _unlink_safe(self.cfg.sock)
 
     async def _ensure_ssh(self) -> None:
         """Connect SSH with exponential backoff."""
@@ -334,8 +547,10 @@ class ApkListenerApp(App):
                 "-o", "ServerAliveInterval=15",
                 "-o", "ServerAliveCountMax=3",
                 self.cfg.remote,
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
+                env=self._ssh_env(),
             )
             rc = await proc.wait()
             if rc == 0:
@@ -486,10 +701,7 @@ class ApkListenerApp(App):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        if key in self.transfers:
-            self.transfers[key].proc = proc
-
-        try:
+        with self._track_proc(key, proc):
             assert proc.stdout is not None
             buf = b""
             while True:
@@ -530,21 +742,19 @@ class ApkListenerApp(App):
                 self.log_event(f"[green]\\[{tag}] Pulled {_human_size(size)}[/green]")
             except OSError:
                 self.log_event(f"[green]\\[{tag}] Pulled[/green]")
-        finally:
-            if key in self.transfers:
-                self.transfers[key].proc = None
 
     async def _adb_install(self, key: str, local_path: str, tag: str) -> None:
         """Install an APK via adb."""
+        cmd = [self.cfg.adb]
+        if self.cfg.device:
+            cmd.extend(["-s", self.cfg.device])
+        cmd.extend(["install", "-r", local_path])
         proc = await asyncio.create_subprocess_exec(
-            self.cfg.adb, "install", "-r", local_path,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
-        if key in self.transfers:
-            self.transfers[key].proc = proc
-
-        try:
+        with self._track_proc(key, proc):
             assert proc.stdout is not None
             async for raw_line in proc.stdout:
                 line = raw_line.decode(errors="replace").strip()
@@ -554,16 +764,24 @@ class ApkListenerApp(App):
             await proc.wait()
             if proc.returncode != 0:
                 raise RuntimeError(f"adb install exited with code {proc.returncode}")
-        finally:
-            if key in self.transfers:
-                self.transfers[key].proc = None
 
     # ── Teardown ─────────────────────────────────────────────────────────
 
     async def action_quit(self) -> None:
         self.log_event("Shutting down...")
         await self._ssh_exit()
+        _unlink_safe(self._askpass_path)
         self.exit()
+
+
+def _unlink_safe(path: str | None) -> None:
+    """Remove a file if it exists, ignoring missing files."""
+    if path is None:
+        return
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 
 def _human_size(nbytes: int) -> str:
