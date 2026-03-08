@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gemma Workspace Namer - Debug Viewer</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; line-height: 1.6; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        h1 { color: #58a6ff; border-bottom: 1px solid #30363d; padding-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .selector { background: #161b22; padding: 10px; border-radius: 6px; margin-bottom: 20px; border: 1px solid #30363d; }
+        select { background: #0d1117; color: white; border: 1px solid #30363d; padding: 5px 10px; border-radius: 4px; font-size: 1em; cursor: pointer; }
+        .section { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 15px; margin-bottom: 20px; }
+        .section-title { font-weight: bold; margin-bottom: 10px; color: #8b949e; text-transform: uppercase; font-size: 0.8em; }
+        pre { background: #010409; padding: 10px; border-radius: 6px; overflow-x: auto; border: 1px solid #30363d; white-space: pre-wrap; word-break: break-all; }
+        img { max-width: 100%; border: 2px solid #30363d; border-radius: 6px; margin-top: 10px; }
+        .meta { color: #8b949e; font-size: 0.9em; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            LLM Input Debug Viewer
+            <div class="selector">
+                Workspace: 
+                <select id="ws-select" onchange="loadDebugData()">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                    <option value="9">9</option>
+                    <option value="10">10</option>
+                </select>
+            </div>
+        </h1>
+        
+        <div class="section">
+            <div class="section-title">The Prompt (Text Only)</div>
+            <pre id="prompt-text">Loading...</pre>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Visual Context (Screenshot)</div>
+            <div class="meta">This is the resized image sent in the 'images' array:</div>
+            <img id="screenshot-img" src="" alt="Screenshot">
+        </div>
+
+        <div class="section">
+            <div class="section-title">Full JSON Payload</div>
+            <pre id="full-payload">Loading...</pre>
+        </div>
+    </div>
+
+    <script>
+        async function loadDebugData() {
+            const wsNum = document.getElementById('ws-select').value;
+            const promptEl = document.getElementById('prompt-text');
+            const payloadEl = document.getElementById('full-payload');
+            const imgEl = document.getElementById('screenshot-img');
+
+            try {
+                const response = await fetch(`payload_${wsNum}.json?t=${Date.now()}`);
+                if (!response.ok) throw new Error("File not found");
+                
+                const data = await response.json();
+                
+                promptEl.textContent = data.prompt;
+                payloadEl.textContent = JSON.stringify(data, null, 2);
+                
+                if (data.images && data.images.length > 0) {
+                    imgEl.src = 'data:image/jpeg;base64,' + data.images[0];
+                    imgEl.style.display = 'block';
+                } else {
+                    imgEl.style.display = 'none';
+                }
+            } catch (err) {
+                promptEl.textContent = `No debug data found for Workspace ${wsNum}. Run the namer script to generate it.`;
+                payloadEl.textContent = "";
+                imgEl.style.display = 'none';
+            }
+        }
+        loadDebugData();
+        // Auto-refresh the current view every 5 seconds
+        setInterval(loadDebugData, 5000);
+    </script>
+</body>
+</html>

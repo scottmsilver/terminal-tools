@@ -1,0 +1,5 @@
+venv/
+__pycache__/
+*.json
+temp_ws_shot.jpg
+
