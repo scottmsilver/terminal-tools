@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DPI Calibration</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Noto Sans', sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    padding: 20px;
+    line-height: 1.5;
+  }
+  h1 { color: #5294e2; margin-bottom: 8px; font-size: 24px; }
+  h2 { color: #5294e2; margin: 24px 0 12px; font-size: 18px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  h3 { color: #7ab5f5; margin: 16px 0 8px; font-size: 15px; }
+
+  .section { background: #16213e; border-radius: 8px; padding: 20px; margin: 16px 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .mono { font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+  /* Ruler */
+  .ruler-container { position: relative; margin: 16px 0; }
+  .ruler {
+    height: 60px;
+    background: #fff;
+    position: relative;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .ruler-marks { position: absolute; top: 0; left: 0; height: 100%; }
+  .ruler-label {
+    color: #333;
+    font-size: 11px;
+    font-weight: bold;
+    position: absolute;
+    bottom: 4px;
+  }
+  .ruler-instruction {
+    color: #ffa726;
+    font-size: 14px;
+    margin: 8px 0;
+    font-weight: bold;
+  }
+
+  /* Slider */
+  .slider-row { display: flex; align-items: center; gap: 16px; margin: 12px 0; }
+  .slider-row input[type="range"] { flex: 1; }
+  .slider-value {
+    background: #0f3460;
+    padding: 4px 12px;
+    border-radius: 4px;
+    font-weight: bold;
+    min-width: 80px;
+    text-align: center;
+    font-size: 18px;
+    color: #5294e2;
+  }
+
+  /* Samples */
+  .sample-box {
+    background: #0a0a1a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 16px;
+    margin: 8px 0;
+  }
+  .sample-label {
+    font-size: 11px;
+    color: #888;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  /* Terminal simulation */
+  .terminal {
+    background: #0c0c0c;
+    color: #33ff33;
+    padding: 12px;
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    white-space: pre;
+    overflow: hidden;
+  }
+
+  /* i3 bar simulation */
+  .i3bar {
+    background: #222222;
+    color: #ffffff;
+    padding: 4px 8px;
+    display: flex;
+    gap: 16px;
+    border-radius: 4px;
+  }
+  .i3bar-ws {
+    background: #285577;
+    padding: 2px 8px;
+    border-radius: 2px;
+  }
+  .i3bar-ws.active { background: #4c7899; }
+
+  /* Diagnostic table */
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    text-align: left;
+    padding: 6px 12px;
+    border-bottom: 1px solid #333;
+    font-size: 13px;
+  }
+  th { color: #5294e2; font-size: 11px; text-transform: uppercase; }
+  .val { color: #ffa726; font-weight: bold; }
+  .ok { color: #66bb6a; }
+  .warn { color: #ffa726; }
+  .bad { color: #ef5350; }
+
+  /* Buttons */
+  .btn {
+    background: #0f3460;
+    color: #5294e2;
+    border: 1px solid #5294e2;
+    padding: 8px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin: 4px;
+  }
+  .btn:hover { background: #1a4a80; }
+  .btn.active { background: #5294e2; color: #fff; }
+
+  .command-box {
+    background: #0c0c0c;
+    border: 1px solid #5294e2;
+    border-radius: 4px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 14px;
+    color: #33ff33;
+    margin: 12px 0;
+    cursor: pointer;
+    position: relative;
+  }
+  .command-box:hover::after {
+    content: 'click to copy';
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    font-size: 11px;
+    color: #888;
+  }
+
+  .note { font-size: 12px; color: #888; font-style: italic; }
+  .cols-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+</style>
+</head>
+<body>
+
+<h1>DPI Calibration Tool</h1>
+<p class="note">For CRD + i3 + WezTerm + Chrome. Hold a physical ruler to your screen for Step 1.</p>
+
+<!-- ================================ -->
+<!-- SECTION 1: Physical Ruler        -->
+<!-- ================================ -->
+<div class="section">
+  <h2>Step 1: Measure Your Physical DPI</h2>
+  <p>Hold a <strong>physical ruler</strong> to your screen. The white bar below should be exactly
+     <strong id="ruler-target-inches">3 inches</strong> long if your DPI is set correctly.</p>
+
+  <div class="ruler-container">
+    <div class="ruler" id="ruler"></div>
+  </div>
+
+  <div class="ruler-instruction" id="ruler-result"></div>
+
+  <p>What does the ruler measure?</p>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0;">
+    <button class="btn" onclick="reportRuler('shorter')">It's shorter than <span class="ruler-inches">3"</span></button>
+    <button class="btn" onclick="reportRuler('exact')">It's exactly <span class="ruler-inches">3"</span></button>
+    <button class="btn" onclick="reportRuler('longer')">It's longer than <span class="ruler-inches">3"</span></button>
+  </div>
+
+  <p style="margin-top: 12px;">Or enter the exact measurement in inches:</p>
+  <div style="display: flex; gap: 8px; align-items: center; margin: 8px 0;">
+    <span>The white bar measures</span>
+    <input type="number" id="ruler-measured" step="0.1" min="0.5" max="20" value="3.0"
+           style="width: 80px; padding: 6px; background: #0a0a1a; color: #fff; border: 1px solid #5294e2; border-radius: 4px; font-size: 16px;">
+    <span>inches on my screen</span>
+    <button class="btn" onclick="calculateFromRuler()">Calculate</button>
+  </div>
+  <div id="ruler-calc-result" style="margin-top: 8px;"></div>
+</div>
+
+<!-- ================================ -->
+<!-- SECTION 2: Interactive DPI       -->
+<!-- ================================ -->
+<div class="section">
+  <h2>Step 2: Find Your Comfortable DPI</h2>
+  <p>Drag the slider until text looks comfortable. The previews show exactly how each app will render.</p>
+
+  <div class="slider-row">
+    <span>72</span>
+    <input type="range" id="dpi-slider" min="72" max="288" step="6" value="96">
+    <span>288</span>
+    <div class="slider-value" id="dpi-display">96</div>
+  </div>
+
+  <div class="grid">
+    <!-- Terminal preview -->
+    <div class="sample-box">
+      <div class="sample-label">WezTerm Terminal <span id="wez-info"></span></div>
+      <div class="terminal" id="terminal-preview">
+$ git log --oneline -3
+a1b2c3d Fix auth middleware
+e4f5g6h Add user dashboard
+i7j8k9l Initial commit
+$ █</div>
+    </div>
+
+    <!-- Chrome/body text preview -->
+    <div class="sample-box">
+      <div class="sample-label">Chrome / Web Content <span id="chrome-info"></span></div>
+      <div id="chrome-preview" style="padding: 8px;">
+        <div style="margin-bottom: 8px;"><strong>Page Title</strong></div>
+        <div>The quick brown fox jumps over the lazy dog. This is body text as Chrome would render it at the selected DPI.</div>
+        <div style="margin-top: 8px;"><code class="mono" id="chrome-code-preview">const x = await fetch('/api')</code></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- i3 bar preview -->
+  <div class="sample-box">
+    <div class="sample-label">i3 Bar &amp; Window Titles <span id="i3-info"></span></div>
+    <div class="i3bar" id="i3bar-preview">
+      <span class="i3bar-ws active">1: dev</span>
+      <span class="i3bar-ws">2: web</span>
+      <span class="i3bar-ws">3: chat</span>
+      <span style="flex: 1;"></span>
+      <span id="i3bar-status">CPU: 12% | Mem: 4.2G | 2026-03-21 14:30</span>
+    </div>
+  </div>
+
+  <!-- Border/gap preview -->
+  <div class="sample-box">
+    <div class="sample-label">i3 Window Borders &amp; Gaps <span id="border-info"></span></div>
+    <div style="display: flex; gap: 0; padding: 16px; background: #0a0a1a; border-radius: 4px;" id="border-preview">
+      <!-- Will be filled by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- ================================ -->
+<!-- SECTION 3: Computed Values       -->
+<!-- ================================ -->
+<div class="section">
+  <h2>Step 3: Apply Settings</h2>
+  <p>Based on your chosen DPI, here are all the values that need to be set:</p>
+
+  <table id="values-table">
+    <tr><th>Setting</th><th>Current</th><th>New</th><th>What it affects</th></tr>
+    <tr><td>Xft.dpi</td><td class="val" id="cur-xft">?</td><td class="val" id="new-xft">96</td><td>WezTerm font scaling, some GTK apps</td></tr>
+    <tr><td>xsettingsd Xft/DPI</td><td class="val" id="cur-xset">?</td><td class="val" id="new-xset">98304</td><td>Chrome, GTK apps, file dialogs</td></tr>
+    <tr><td>i3 font size</td><td class="val" id="cur-i3font">?</td><td class="val" id="new-i3font">11</td><td>i3 bar, window titles, tab titles</td></tr>
+    <tr><td>i3 border size</td><td class="val" id="cur-i3border">?</td><td class="val" id="new-i3border">8</td><td>Window borders (floating)</td></tr>
+    <tr><td>i3 inner gaps</td><td class="val" id="cur-i3gaps">?</td><td class="val" id="new-i3gaps">8</td><td>Space between windows</td></tr>
+    <tr><td>WezTerm font</td><td class="val" id="cur-wez">?</td><td class="val" id="new-wez">11.0</td><td>Terminal text size (auto-calculated)</td></tr>
+    <tr><td>Chrome DPR</td><td class="val" id="cur-dpr">?</td><td class="val" id="new-dpr">1.0</td><td>Chrome rendering scale</td></tr>
+  </table>
+
+  <h3>Run this command:</h3>
+  <div class="command-box" id="apply-command" onclick="copyCommand()">
+    ~/scripts/set_dpi.sh 96
+  </div>
+  <div id="copy-feedback" style="color: #66bb6a; font-size: 12px; margin-top: 4px;"></div>
+
+  <h3>Quick Profiles</h3>
+  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+    <button class="btn" onclick="setDPI(96)">96 DPI (1080p/QHD desktop)</button>
+    <button class="btn" onclick="setDPI(120)">120 DPI (4K 27" desktop)</button>
+    <button class="btn" onclick="setDPI(144)">144 DPI (4K 24" / HiDPI laptop)</button>
+    <button class="btn" onclick="setDPI(168)">168 DPI (14" MacBook Pro)</button>
+    <button class="btn" onclick="setDPI(192)">192 DPI (2x / Retina)</button>
+    <button class="btn" onclick="setDPI(216)">216 DPI (13" HiDPI ultrabook)</button>
+  </div>
+</div>
+
+<!-- ================================ -->
+<!-- SECTION 4: Diagnostic Info       -->
+<!-- ================================ -->
+<div class="section">
+  <h2>Current System State</h2>
+  <div id="diagnostics">
+    <p class="note">Detected automatically from your browser environment.</p>
+    <table>
+      <tr><th>Property</th><th>Value</th><th>Status</th></tr>
+      <tr>
+        <td>Browser devicePixelRatio</td>
+        <td class="val" id="diag-dpr"></td>
+        <td id="diag-dpr-status"></td>
+      </tr>
+      <tr>
+        <td>Browser window size</td>
+        <td class="val" id="diag-window"></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td>Screen resolution</td>
+        <td class="val" id="diag-screen"></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td>Available screen area</td>
+        <td class="val" id="diag-avail"></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td>CSS 1in reference</td>
+        <td class="val" id="diag-css-inch"></td>
+        <td id="diag-inch-status"></td>
+      </tr>
+    </table>
+  </div>
+
+  <h3>Understanding the Scaling Chain</h3>
+  <div style="font-size: 13px; line-height: 1.8;">
+    <pre class="mono" style="color: #aaa; font-size: 12px; overflow-x: auto;">
+Your client screen (physical pixels)
+  └─ CRD client (may scale to fit window)
+       └─ Server framebuffer (<span id="diag-fb-res">?x?</span> via xrandr)
+            ├─ Xft.dpi → WezTerm reads this → font_size = 11 * (DPI/96)
+            ├─ xsettingsd Xft/DPI → Chrome, GTK apps use this for rendering scale
+            ├─ i3 config font → bar text, window titles (manual pt size)
+            └─ i3 border/gaps → window chrome (manual px size)</pre>
+    <p class="note" style="margin-top: 8px;">
+      <strong>Key insight:</strong> Xft.dpi and xsettingsd must agree, or WezTerm and Chrome will scale differently.
+      In the old script's laptop mode, Xft.dpi=192 but xsettingsd=216 — that's a 12.5% mismatch!
+    </p>
+  </div>
+</div>
+
+<script>
+// ========================================
+// Configuration constants
+// ========================================
+const BASE_FONT_SIZE = 11.0;  // WezTerm base at 96 DPI
+const BASE_I3_FONT = 11;      // i3 font at 96 DPI
+const BASE_I3_BORDER = 3;     // i3 pixel border at 96 DPI (tiling)
+const BASE_I3_FLOAT_BORDER = 8; // i3 floating border at 96 DPI
+const BASE_I3_GAPS_INNER = 8;
+const BASE_I3_GAPS_OUTER = 2;
+
+// Reference: how many CSS px = 1 physical inch in Chrome at the current DPR
+// Chrome defines 1 CSS inch = 96 CSS px (always). But CSS inches != physical inches.
+// Physical DPI = 96 * devicePixelRatio (approximately, if Chrome's DPI is set correctly)
+const dpr = window.devicePixelRatio || 1;
+
+// ========================================
+// Ruler setup
+// ========================================
+const RULER_TARGET_INCHES = 3;
+
+function drawRuler() {
+  const ruler = document.getElementById('ruler');
+  ruler.innerHTML = '';
+
+  // CSS "inch" = 96 CSS px. We draw 3 CSS inches.
+  // If DPI is set correctly, this should be 3 physical inches.
+  const cssPixelsPerInch = 96; // Chrome always uses 96 CSS px = 1 CSS inch
+  const totalWidth = cssPixelsPerInch * RULER_TARGET_INCHES;
+  ruler.style.width = totalWidth + 'px';
+
+  const canvas = document.createElement('canvas');
+  // Use device pixels for sharp rendering
+  canvas.width = totalWidth * dpr;
+  canvas.height = 60 * dpr;
+  canvas.style.width = totalWidth + 'px';
+  canvas.style.height = '60px';
+  ruler.appendChild(canvas);
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, totalWidth, 60);
+
+  // Draw tick marks every 1/8 inch
+  for (let i = 0; i <= RULER_TARGET_INCHES * 8; i++) {
+    const x = (i / 8) * cssPixelsPerInch;
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+
+    let tickHeight;
+    if (i % 8 === 0) {
+      tickHeight = 40; // Full inch
+      ctx.lineWidth = 2;
+    } else if (i % 4 === 0) {
+      tickHeight = 28; // Half inch
+    } else if (i % 2 === 0) {
+      tickHeight = 18; // Quarter inch
+    } else {
+      tickHeight = 10; // Eighth inch
+    }
+
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, tickHeight);
+    ctx.stroke();
+
+    // Label full inches
+    if (i % 8 === 0) {
+      ctx.fillStyle = '#333';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(i / 8), x, tickHeight + 16);
+    }
+  }
+}
+
+function reportRuler(result) {
+  const el = document.getElementById('ruler-result');
+  if (result === 'shorter') {
+    el.innerHTML = 'DPI is set <span class="bad">too high</span> — things render too large for your screen pixel density. Lower the DPI.';
+  } else if (result === 'exact') {
+    el.innerHTML = '<span class="ok">DPI is correct</span> for physical size! If things still look wrong, the issue is font/UI size preferences, not DPI.';
+  } else {
+    el.innerHTML = 'DPI is set <span class="bad">too low</span> — things render too small for your screen pixel density. Raise the DPI.';
+  }
+}
+
+function calculateFromRuler() {
+  const measured = parseFloat(document.getElementById('ruler-measured').value);
+  if (!measured || measured <= 0) return;
+
+  // We drew RULER_TARGET_INCHES CSS inches = RULER_TARGET_INCHES * 96 CSS px
+  // Those CSS px = (RULER_TARGET_INCHES * 96 * dpr) device pixels on the server framebuffer
+  // The user measured 'measured' physical inches on their screen
+  // So physical DPI = (device pixels in the bar) / measured inches
+  const devicePixelsInBar = RULER_TARGET_INCHES * 96 * dpr;
+  const physicalDPI = devicePixelsInBar / measured;
+
+  const el = document.getElementById('ruler-calc-result');
+  el.innerHTML = `
+    <p>Your screen's <strong>effective DPI is ~${Math.round(physicalDPI)}</strong></p>
+    <p class="note">
+      Calculation: ${RULER_TARGET_INCHES} CSS inches = ${devicePixelsInBar} device pixels,
+      measured ${measured}" → ${Math.round(physicalDPI)} DPI.
+      <br>Chrome devicePixelRatio: ${dpr}x.
+      <br>This means <strong>Xft.dpi should be ~${Math.round(physicalDPI)}</strong> for
+      1:1 physical sizing (round to nearest 6: <strong>${Math.round(physicalDPI / 6) * 6}</strong>).
+    </p>
+    <button class="btn" onclick="setDPI(${Math.round(physicalDPI / 6) * 6})" style="margin-top: 8px;">
+      Set DPI to ${Math.round(physicalDPI / 6) * 6}
+    </button>
+  `;
+}
+
+// ========================================
+// DPI Slider
+// ========================================
+const slider = document.getElementById('dpi-slider');
+const dpiDisplay = document.getElementById('dpi-display');
+
+function setDPI(value) {
+  slider.value = value;
+  updatePreviews();
+}
+
+function updatePreviews() {
+  const dpi = parseInt(slider.value);
+  const scale = dpi / 96;
+  dpiDisplay.textContent = dpi;
+
+  // --- WezTerm preview ---
+  const wezFontSize = BASE_FONT_SIZE * scale;
+  const termEl = document.getElementById('terminal-preview');
+  // Convert WezTerm pt to CSS px: WezTerm renders at the DPI we set,
+  // but Chrome is viewing this at the CURRENT DPR. So we simulate:
+  // The effective CSS px size = (wezFontSize in pt) * (96/72) for pt→px,
+  // but WezTerm uses px directly based on DPI.
+  // For preview: just show the proportional size relative to base.
+  // At 96 DPI, WezTerm 11pt looks like ~11px in a 96-DPI Chrome. Scale proportionally.
+  termEl.style.fontSize = (11 * scale) + 'px';
+  document.getElementById('wez-info').textContent = `(font: ${wezFontSize.toFixed(1)}pt)`;
+
+  // --- Chrome preview ---
+  // Chrome scales its content by xsettingsd DPI. Default text is 16px at 96 DPI.
+  // At higher DPI, Chrome increases its devicePixelRatio, which makes CSS px render larger.
+  // Effective: 16px * (dpi/96) in physical size, but Chrome CSS stays 16px.
+  // For preview, we simulate by scaling the container.
+  const chromeEl = document.getElementById('chrome-preview');
+  chromeEl.style.fontSize = (16 * scale) + 'px';
+  document.getElementById('chrome-code-preview').style.fontSize = (14 * scale) + 'px';
+  document.getElementById('chrome-info').textContent = `(DPR: ${scale.toFixed(2)}x, base 16px → appears as ${(16 * scale).toFixed(0)}px)`;
+
+  // --- i3 bar preview ---
+  const i3FontSize = Math.round(BASE_I3_FONT * scale);
+  const i3barEl = document.getElementById('i3bar-preview');
+  i3barEl.style.fontSize = i3FontSize + 'px';
+  i3barEl.style.padding = `${Math.round(4 * scale)}px ${Math.round(8 * scale)}px`;
+  document.querySelectorAll('.i3bar-ws').forEach(ws => {
+    ws.style.padding = `${Math.round(2 * scale)}px ${Math.round(8 * scale)}px`;
+  });
+  document.getElementById('i3-info').textContent = `(font: ${i3FontSize}pt)`;
+
+  // --- Border/gap preview ---
+  const borderSize = Math.max(1, Math.round(BASE_I3_BORDER * scale));
+  const floatBorder = Math.max(2, Math.round(BASE_I3_FLOAT_BORDER * scale));
+  const gapInner = Math.max(2, Math.round(BASE_I3_GAPS_INNER * scale));
+  const gapOuter = Math.max(1, Math.round(BASE_I3_GAPS_OUTER * scale));
+  const borderEl = document.getElementById('border-preview');
+  borderEl.style.gap = gapInner + 'px';
+  borderEl.style.padding = gapOuter + 'px';
+  borderEl.innerHTML = `
+    <div style="flex:1; border: ${borderSize}px solid #5294e2; padding: 12px; background: #1a1a2e; border-radius: 2px;">
+      <div style="font-size: ${11 * scale}px;" class="mono">Terminal (tiled, ${borderSize}px border)</div>
+    </div>
+    <div style="flex:1; border: ${floatBorder}px solid #5294e2; padding: 12px; background: #1a1a2e; border-radius: 2px;">
+      <div style="font-size: ${16 * scale}px;">Chrome (floating, ${floatBorder}px border)</div>
+    </div>
+  `;
+  document.getElementById('border-info').textContent =
+    `(border: ${borderSize}px tiled / ${floatBorder}px float, gaps: ${gapInner}px inner / ${gapOuter}px outer)`;
+
+  // --- Values table ---
+  document.getElementById('new-xft').textContent = dpi;
+  document.getElementById('new-xset').textContent = dpi * 1024;
+  document.getElementById('new-i3font').textContent = i3FontSize;
+  document.getElementById('new-i3border').textContent = floatBorder;
+  document.getElementById('new-i3gaps').textContent = gapInner;
+  document.getElementById('new-wez').textContent = wezFontSize.toFixed(1) + ' (auto)';
+  document.getElementById('new-dpr').textContent = scale.toFixed(2) + 'x';
+
+  // Highlight consistency
+  const allSame = true; // In new script, Xft.dpi and xsettingsd always agree
+  document.getElementById('new-xft').className = 'val ok';
+  document.getElementById('new-xset').className = 'val ok';
+
+  // --- Command ---
+  document.getElementById('apply-command').textContent = `~/scripts/set_dpi.sh ${dpi}`;
+
+  // Update profile button highlights
+  document.querySelectorAll('.btn').forEach(btn => btn.classList.remove('active'));
+}
+
+slider.addEventListener('input', updatePreviews);
+
+function copyCommand() {
+  const cmd = document.getElementById('apply-command').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    document.getElementById('copy-feedback').textContent = 'Copied!';
+    setTimeout(() => document.getElementById('copy-feedback').textContent = '', 2000);
+  }).catch(() => {
+    // Fallback: select text
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('apply-command'));
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  });
+}
+
+// ========================================
+// Diagnostics
+// ========================================
+function populateDiagnostics() {
+  document.getElementById('diag-dpr').textContent = dpr;
+  const dprStatus = document.getElementById('diag-dpr-status');
+  if (dpr === 1) {
+    dprStatus.innerHTML = '<span class="ok">Standard (96 DPI)</span>';
+  } else {
+    dprStatus.innerHTML = `<span class="warn">Scaled ${dpr}x (effective ${Math.round(96 * dpr)} DPI)</span>`;
+  }
+
+  document.getElementById('diag-window').textContent =
+    `${window.innerWidth}x${window.innerHeight} CSS px (${Math.round(window.innerWidth * dpr)}x${Math.round(window.innerHeight * dpr)} device px)`;
+  document.getElementById('diag-screen').textContent =
+    `${screen.width}x${screen.height}`;
+  document.getElementById('diag-avail').textContent =
+    `${screen.availWidth}x${screen.availHeight}`;
+
+  // CSS 1in test: create a hidden div that's 1in wide, measure it
+  const testDiv = document.createElement('div');
+  testDiv.style.width = '1in';
+  testDiv.style.height = '1in';
+  testDiv.style.position = 'absolute';
+  testDiv.style.visibility = 'hidden';
+  document.body.appendChild(testDiv);
+  const cssInchPx = testDiv.offsetWidth;
+  document.body.removeChild(testDiv);
+
+  document.getElementById('diag-css-inch').textContent = `${cssInchPx} CSS px = 1 CSS inch`;
+  const inchStatus = document.getElementById('diag-inch-status');
+  if (cssInchPx === 96) {
+    inchStatus.innerHTML = '<span class="ok">Standard (Chrome uses 96 CSS px per inch)</span>';
+  } else {
+    inchStatus.innerHTML = `<span class="warn">Non-standard</span>`;
+  }
+
+  document.getElementById('diag-fb-res').textContent = `${screen.width}x${screen.height}`;
+}
+
+// ========================================
+// Populate current values (best effort)
+// ========================================
+function populateCurrentValues() {
+  // We can detect Chrome's current DPR, which reflects xsettingsd DPI
+  const effectiveDPI = Math.round(96 * dpr);
+  document.getElementById('cur-xft').textContent = '(run diagnose)';
+  document.getElementById('cur-xset').textContent = `~${effectiveDPI * 1024} (DPR=${dpr})`;
+  document.getElementById('cur-i3font').textContent = '(check config)';
+  document.getElementById('cur-i3border').textContent = '(check config)';
+  document.getElementById('cur-i3gaps').textContent = '(check config)';
+  document.getElementById('cur-wez').textContent = `${(BASE_FONT_SIZE * dpr).toFixed(1)} (at DPR ${dpr})`;
+  document.getElementById('cur-dpr').textContent = dpr + 'x';
+}
+
+// ========================================
+// Init
+// ========================================
+drawRuler();
+updatePreviews();
+populateDiagnostics();
+populateCurrentValues();
+
+// Update ruler-inches spans
+document.querySelectorAll('.ruler-inches').forEach(el => {
+  el.textContent = RULER_TARGET_INCHES + '"';
+});
+</script>
+
+</body>
+</html>
