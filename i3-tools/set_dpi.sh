@@ -25,6 +25,7 @@ set -euo pipefail
 XSETTINGS_CFG="$HOME/.config/xsettingsd/xsettingsd.conf"
 WEZTERM_MAIN="$HOME/.wezterm.lua"
 I3_CONFIG="$HOME/.config/i3/config"
+POLYBAR_CFG="$HOME/.config/polybar/config.ini"
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 DPI_MAP_FILE="$HOME/.config/dpi-profiles.conf"
 
@@ -33,6 +34,9 @@ BASE_I3_FONT=11
 BASE_I3_FLOAT_BORDER=8
 BASE_I3_GAPS_INNER=8
 BASE_I3_GAPS_OUTER=2
+BASE_POLYBAR_FONT=13
+BASE_POLYBAR_OFFSET=4
+BASE_POLYBAR_HEIGHT=38
 
 # ==========================================
 # FUNCTIONS
@@ -357,6 +361,12 @@ apply_dpi() {
     I3_GAPS_INNER=$(echo "scale=0; $BASE_I3_GAPS_INNER * $SCALE / 1" | bc)
     local I3_GAPS_OUTER
     I3_GAPS_OUTER=$(echo "scale=0; $BASE_I3_GAPS_OUTER * $SCALE / 1" | bc)
+    local POLYBAR_FONT
+    POLYBAR_FONT=$(echo "scale=0; $BASE_POLYBAR_FONT * $SCALE / 1" | bc)
+    local POLYBAR_OFFSET
+    POLYBAR_OFFSET=$(echo "scale=0; $BASE_POLYBAR_OFFSET * $SCALE / 1" | bc)
+    local POLYBAR_HEIGHT
+    POLYBAR_HEIGHT=$(echo "scale=0; $BASE_POLYBAR_HEIGHT * $SCALE / 1" | bc)
     # xsettingsd uses DPI * 1024 — SAME DPI as Xft.dpi for consistency
     local XSET_DPI=$((TARGET_DPI * 1024))
 
@@ -375,12 +385,13 @@ apply_dpi() {
     echo "  i3 float border:   ${I3_FLOAT_BORDER}px"
     echo "  i3 inner gaps:     ${I3_GAPS_INNER}px"
     echo "  i3 outer gaps:     ${I3_GAPS_OUTER}px"
+    echo "  Polybar font:      ${POLYBAR_FONT}pt (height ${POLYBAR_HEIGHT}px)"
     echo "  WezTerm font:      $(echo "scale=1; 11 * $SCALE" | bc)pt (auto)"
     echo "============================================"
     echo
 
     # 1. Update X11 Resources
-    echo -n "[1/6] Setting Xft.dpi=$TARGET_DPI... "
+    echo -n "[1/7] Setting Xft.dpi=$TARGET_DPI... "
     echo "Xft.dpi: $TARGET_DPI" | xrdb -merge
     # Verify
     local MAX_RETRIES=20 count=0
@@ -400,7 +411,7 @@ apply_dpi() {
     done
 
     # 2. Update i3 config
-    echo -n "[2/6] Updating i3 config... "
+    echo -n "[2/7] Updating i3 config... "
     if [ -f "$I3_CONFIG" ]; then
         sed -i "s/^font pango:Noto Sans [0-9]*/font pango:Noto Sans $I3_FONT_SIZE/" "$I3_CONFIG"
         sed -i "s/^default_floating_border normal [0-9]*/default_floating_border normal $I3_FLOAT_BORDER/" "$I3_CONFIG"
@@ -412,7 +423,7 @@ apply_dpi() {
     fi
 
     # 3. Update xsettingsd (GTK/Chrome) — SAME DPI as Xft.dpi
-    echo -n "[3/6] Updating xsettingsd ($TARGET_DPI DPI)... "
+    echo -n "[3/7] Updating xsettingsd ($TARGET_DPI DPI)... "
     mkdir -p "$(dirname "$XSETTINGS_CFG")"
     echo "Xft/DPI $XSET_DPI" > "$XSETTINGS_CFG"
     if pgrep xsettingsd > /dev/null; then
@@ -427,8 +438,18 @@ apply_dpi() {
         fi
     fi
 
-    # 4. Trigger WezTerm config reload
-    echo -n "[4/6] Triggering WezTerm reload... "
+    # 4. Update polybar font/height
+    echo -n "[4/7] Updating polybar... "
+    if [ -f "$POLYBAR_CFG" ]; then
+        sed -i "s/^font-0 = Noto Sans:size=[0-9]*;[0-9]*/font-0 = Noto Sans:size=${POLYBAR_FONT};${POLYBAR_OFFSET}/" "$POLYBAR_CFG"
+        sed -i "s/^height = [0-9]*/height = $POLYBAR_HEIGHT/" "$POLYBAR_CFG"
+        echo "done (font ${POLYBAR_FONT}pt, height ${POLYBAR_HEIGHT}px)."
+    else
+        echo "skipped (config not found)."
+    fi
+
+    # 5. Trigger WezTerm config reload
+    echo -n "[5/7] Triggering WezTerm reload... "
     if [ -f "$WEZTERM_MAIN" ]; then
         touch "$WEZTERM_MAIN"
         echo "done."
@@ -436,13 +457,13 @@ apply_dpi() {
         echo "skipped."
     fi
 
-    # 5. Reload i3
-    echo -n "[5/6] Restarting i3... "
+    # 6. Reload i3 (also restarts polybar via exec_always)
+    echo -n "[6/7] Restarting i3... "
     i3-msg restart >/dev/null 2>&1 || true
     echo "done."
 
-    # 6. Summary
-    echo "[6/6] Verifying..."
+    # 7. Summary
+    echo "[7/7] Verifying..."
     sleep 0.5
     local final_xft
     final_xft=$(xrdb -query 2>/dev/null | grep 'Xft.dpi' | awk '{print $2}')

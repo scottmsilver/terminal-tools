@@ -24,7 +24,7 @@ Uses a "Focus Probe" technique to deterministically map WezTerm windows to i3 wo
 
 ### `set_dpi.sh` — DPI / Font Switcher
 
-Sets all scaling knobs consistently from a single DPI value: X resources, xsettingsd (Chrome/GTK), i3 font, borders, gaps. WezTerm auto-scales by reading `Xft.dpi`. Saves resolution→DPI profiles so it can auto-detect the right DPI when switching between CRD client devices.
+Sets all scaling knobs consistently from a single DPI value: X resources, xsettingsd (Chrome/GTK), i3 font, borders, gaps, and polybar font/height. WezTerm auto-scales by reading `Xft.dpi`. Saves resolution→DPI profiles so it can auto-detect the right DPI when switching between CRD client devices.
 
 ```bash
 ./set_dpi.sh              # Auto-detect from saved resolution→DPI profile
@@ -37,6 +37,15 @@ Sets all scaling knobs consistently from a single DPI value: X resources, xsetti
 ```
 
 Profiles stored in `~/.config/dpi-profiles.conf`. The calibration page (`calibrate.html`) includes a physical ruler measurement tool and an interactive DPI slider with live previews of terminal, Chrome, and i3 bar rendering.
+
+### `polybar/` — Status Bar Configuration
+
+Polybar config (Dracula theme) replacing i3bar. Features scrollable workspace tabs (mouse wheel cycles through workspaces that don't fit), compact status modules (C/L/M/D), and a `?` keybinding cheat sheet button. Font size and bar height are automatically scaled by `set_dpi.sh`.
+
+Symlink to `~/.config/polybar/`:
+```bash
+ln -sf ~/development/i3/agent-tools/i3-tools/polybar ~/.config/polybar
+```
 
 ### `wezterm.lua` — WezTerm Configuration
 
