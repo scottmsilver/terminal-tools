@@ -1,0 +1,30 @@
+# Per-machine i3 overrides.
+#
+# To use: cp this file to ~/.config/i3/conf.d/local.conf and tweak.
+# This file is included at the END of the main config, so everything set
+# here overrides the repo defaults. One exception: i3 variables like $mod
+# are substituted at parse time where they are referenced, so redefining
+# $mod here will not retroactively change the bindings defined earlier.
+#
+# Reload with Mod+Shift+c after editing.
+
+# --- Display / font ---------------------------------------------------------
+# Font size is DPI-dependent. Bump for HiDPI laptops, drop for remote desktop.
+# font pango:Noto Sans 14
+# font pango:Noto Sans 17
+# font pango:Noto Sans 22
+
+# --- Gaps & borders ---------------------------------------------------------
+# gaps inner 6
+# gaps outer 0
+# default_border pixel 2
+
+# --- xdg-desktop-portal path ------------------------------------------------
+# The main config already tries /usr/lib/ then /usr/libexec/ automatically.
+# Override here only if your distro uses a non-standard path. Use `killall`
+# rather than `pkill -f xdg-desktop-portal-gtk` — the latter also matches the
+# surrounding shell's command line and kills it before the restart happens.
+# exec --no-startup-id bash -c 'killall xdg-desktop-portal-gtk 2>/dev/null; sleep 1; /path/to/xdg-desktop-portal-gtk &'
+
+# --- Extra per-machine keybindings or for_window rules ----------------------
+# Add anything else machine-specific here.
