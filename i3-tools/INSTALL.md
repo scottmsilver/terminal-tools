@@ -17,17 +17,18 @@ Install these system packages:
 - `xdotool` (window manipulation)
 - `bc` (arithmetic in set_dpi.sh)
 - `python3` with `i3ipc` and `requests` (workspace namer)
+- `python3-tk` (tkinter — required by `show-keybindings.py` for the polybar `?` cheat-sheet popup; the anaconda `python3` has it but the system one at `/usr/bin/python3` that polybar's `PATH` hits does not)
 
 On Ubuntu/Debian:
 ```
-sudo apt install i3 polybar wezterm xsettingsd imagemagick rofi dunst parcellite xdotool bc python3-pip
+sudo apt install i3 polybar wezterm xsettingsd imagemagick rofi dunst parcellite xdotool bc python3-pip python3-tk
 pip install i3ipc requests
 ```
 
-For the workspace namer's AI features, install Ollama and pull a model:
+For the workspace namer's AI features, install the Gemini CLI and authenticate it once interactively:
 ```
-# Install Ollama from https://ollama.ai
-ollama pull gemma3:12b
+npm install -g @google/gemini-cli    # or follow https://geminicli.com/
+gemini                                # first run prompts for auth; credentials are cached after
 ```
 
 ## Clone the repo
@@ -50,7 +51,7 @@ ln -sf ~/development/i3/agent-tools/i3-tools/set_dpi.sh ~/scripts/set_dpi.sh
 ln -sf ~/development/i3/agent-tools/i3-tools/fix-workspaces.py ~/scripts/fix-workspaces.py
 ln -sf ~/development/i3/agent-tools/i3-tools/show-keybindings.py ~/scripts/show-keybindings.sh
 ln -sf ~/development/i3/agent-tools/i3-tools/i3-window-tracker.py ~/scripts/i3-window-tracker.py
-ln -sf ~/development/i3/agent-tools/i3-tools/i3status-wrapper.py ~/scripts/i3status-wrapper.py
+ln -sf ~/development/i3/agent-tools/i3-tools/workspace_namer.py ~/scripts/workspace_namer.py
 
 # Polybar config (symlink the whole directory)
 ln -sf ~/development/i3/agent-tools/i3-tools/polybar ~/.config/polybar
@@ -158,8 +159,7 @@ After restarting i3 (`$mod+Shift+r`):
 | `fix-workspaces.py` | `~/scripts/fix-workspaces.py` | Workspace recovery after CRD reconnect |
 | `show-keybindings.py` | `~/scripts/show-keybindings.sh` | Floating keybinding cheat sheet |
 | `i3-window-tracker.py` | `~/scripts/i3-window-tracker.py` | Window origin tracking daemon |
-| `i3status-wrapper.py` | `~/scripts/i3status-wrapper.py` | Legacy i3bar wrapper (unused with polybar) |
-| `workspace_namer.py` | (run directly) | AI workspace naming via Ollama |
+| `workspace_namer.py` | `~/scripts/workspace_namer.py` | AI workspace naming via the `gemini` CLI; invoked by the polybar ✨ button |
 | `calibrate.html` | (opened by set_dpi.sh) | Visual DPI calibration page |
 
 ## Profiles

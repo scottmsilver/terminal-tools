@@ -6,7 +6,7 @@ Utilities for managing an i3wm + WezTerm desktop environment. Includes AI-powere
 
 - **i3wm** and **WezTerm**
 - **Python 3.10+** with `i3ipc` and `requests` (`pip install -r requirements.txt`)
-- **Ollama** with `gemma3:12b` or `gemma3:4b` (for workspace namer)
+- **Gemini CLI** authenticated once interactively (for workspace namer — `npm install -g @google/gemini-cli`)
 - **ImageMagick** (for screenshots)
 - **xrdb**, **xsettingsd** (for DPI switching)
 
@@ -14,13 +14,13 @@ Utilities for managing an i3wm + WezTerm desktop environment. Includes AI-powere
 
 ### `workspace_namer.py` — AI Workspace Namer
 
-Renames i3 workspaces based on their content using local LLMs (Gemma 3 via Ollama). Combines WezTerm terminal text, git metadata, and screenshots for multimodal analysis.
+Renames i3 workspaces based on their content by shelling out to the `gemini` CLI. Gathers WezTerm terminal text, git metadata, and X11 window classes/titles per workspace, sends one prompt, and applies the returned names.
 
 ```bash
 ./workspace_namer.py
 ```
 
-Uses a "Focus Probe" technique to deterministically map WezTerm windows to i3 workspaces. Git worktree aware. Debug payloads saved as `payload_*.json` — inspect with `debug.html` via `python3 -m http.server 9999`.
+Invoked by the polybar ✨ button. No arguments; always names all active workspaces. Errors surface via `notify-send`.
 
 ### `set_dpi.sh` — DPI / Font Switcher
 
