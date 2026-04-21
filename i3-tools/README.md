@@ -1,6 +1,15 @@
 # i3 Tools
 
-Utilities for managing an i3wm + WezTerm desktop environment. Includes AI-powered workspace naming, DPI switching for laptop/desktop modes, workspace recovery after CRD reconnects, and status bar enhancements.
+Utilities for managing an i3wm + WezTerm desktop environment. Includes a versioned i3 config with per-machine overrides, AI-powered workspace naming, DPI switching for laptop/desktop modes, workspace recovery after CRD reconnects, status bar enhancements, and a Chrome-Remote-Desktop client-OS detector that retunes keybindings when the client is a Chromebook.
+
+## Quick start
+
+```bash
+cd i3/
+./install.sh            # installs ~/.config/i3/config + ~/scripts/crd-client-detector.py
+```
+
+See [`i3/README.md`](i3/README.md) for the full i3-config + CRD detector story. Everything below covers the companion scripts that live in `i3-tools/` proper.
 
 ## Prerequisites
 
@@ -11,6 +20,14 @@ Utilities for managing an i3wm + WezTerm desktop environment. Includes AI-powere
 - **xrdb**, **xsettingsd** (for DPI switching)
 
 ## Tools
+
+### `i3/` — i3 config + CRD client-OS detector
+
+The versioned i3 config, a `conf.d/` override pattern for per-machine
+settings, and a daemon that rebinds `$mod` shortcuts to Alt when the Chrome
+Remote Desktop client is a Chromebook (ChromeOS swallows the Super key
+client-side, breaking Mod4-based shortcuts). Install via `i3/install.sh`.
+Full details in [`i3/README.md`](i3/README.md).
 
 ### `workspace_namer.py` — AI Workspace Namer
 

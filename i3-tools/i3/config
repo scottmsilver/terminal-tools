@@ -203,6 +203,15 @@ popup_during_fullscreen smart
 # Polybar (replaces i3bar)
 exec_always --no-startup-id ~/.config/polybar/launch.sh
 
+# Detect CRD client OS and dual-bind $mod shortcuts to Alt when it's ChromeOS
+# (ChromeOS swallows the Search/Super key client-side, breaking Mod4 shortcuts).
+# Logs to ~/.cache/i3-crd-client.log. Note: i3-msg reload does NOT re-fire
+# exec_always in 4.23 — restart does — but the daemon is long-lived and
+# self-updates on client reconnect, so this only needs to start once per session.
+# ~/scripts/crd-client-detector.py is a symlink to the repo script, placed by
+# install.sh — matches the existing ~/scripts/ convention used by set_dpi.sh etc.
+exec_always --no-startup-id ~/scripts/crd-client-detector.py
+
 
 # DPI: auto-detect from saved resolution→DPI profiles
 bindsym $mod+Shift+d exec --no-startup-id ~/scripts/set_dpi.sh

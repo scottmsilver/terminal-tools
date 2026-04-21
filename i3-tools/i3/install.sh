@@ -30,6 +30,13 @@ fi
 cp "$REPO_DIR/config" "$TARGET_CONFIG"
 echo "Copied $REPO_DIR/config → $TARGET_CONFIG"
 
+# Symlink the CRD client detector into ~/scripts/ so the i3 config's
+# exec_always line (which references ~/scripts/crd-client-detector.py) resolves.
+# Matches the existing convention for set_dpi.sh / fix-workspaces.py etc.
+mkdir -p "$HOME/scripts"
+ln -sfn "$REPO_DIR/crd-client-detector.py" "$HOME/scripts/crd-client-detector.py"
+echo "Linked $HOME/scripts/crd-client-detector.py → $REPO_DIR/crd-client-detector.py"
+
 # Seed a local override file from the example if none exists.
 if ! compgen -G "$CONF_D/*.conf" > /dev/null; then
   cp "$REPO_DIR/conf.d/local.conf.example" "$CONF_D/local.conf"
@@ -49,6 +56,7 @@ if command -v i3 >/dev/null; then
     [[ -e "$HOME/.config/polybar/launch.sh" ]] || missing+=("~/.config/polybar/launch.sh")
     [[ -e "$HOME/scripts/set_dpi.sh" ]] || missing+=("~/scripts/set_dpi.sh")
     [[ -e "$HOME/scripts/fix-workspaces.py" ]] || missing+=("~/scripts/fix-workspaces.py")
+    [[ -e "$HOME/scripts/crd-client-detector.py" ]] || missing+=("~/scripts/crd-client-detector.py")
     if (( ${#missing[@]} )); then
       echo
       echo "NOTE: the config references paths that aren't installed yet:"
