@@ -10,20 +10,28 @@ Chromebook.
 |------|--------------|
 | `config` | Main i3 config. Copy of what the wizard generates plus gaps, polybar, DPI, file-picker floating rules, and an `exec_always` that launches the CRD detector. |
 | `install.sh` | Installs `config` to `~/.config/i3/config`, symlinks the detector into `~/scripts/`, seeds `~/.config/i3/conf.d/local.conf` from the example, validates, reloads i3. |
-| `crd-client-detector.py` | Long-lived daemon. Watches the Chrome Remote Desktop journal for `session-initiate` stanzas, maps the client-id to `~/.config/chrome-remote-desktop/paired-clients/<id>.json` to recover the client's OS string, and — on ChromeOS — generates `~/.config/i3/conf.d/crd-mod.conf` with Alt-based copies of every `$mod` binding. Other clients leave the file empty. |
+| `crd-client-detector.py` | Long-lived daemon. Watches the Chrome Remote Desktop journal for `session-initiate` stanzas, maps the client-id to `~/.config/chrome-remote-desktop/paired-clients/<id>.json` to recover the client's OS string, and — on ChromeOS — generates `~/.config/i3/conf.d/crd-mod.conf` with `Ctrl+Super` alternatives for the narrow set of chords ChromeOS still captures client-side even with "Send system keys" enabled (Super+Tab, Super+L, Super+Arrows). Other clients leave the file empty. |
 | `conf.d/local.conf.example` | Seed file for per-machine overrides (font size, gaps, distro-specific paths). Copy to `~/.config/i3/conf.d/local.conf` on each machine. |
 
 ## Why a CRD client detector?
 
-ChromeOS swallows the **Search** / **Launcher** key (which normally maps to
-`Super_L` / `Mod4`) before it ever leaves the client. That means every i3
-shortcut bound to `$mod` (Mod4 by default) silently fails: `$mod+Return`,
-`$mod+d`, `$mod+1..9`, `$mod+Shift+r`, all dead.
+ChromeOS's CRD client has a **"Send system keys"** toggle. With it off,
+the Search / Launcher key (Super / Mod4) is swallowed client-side and
+every i3 shortcut breaks — this detector doesn't help in that case; enable
+the toggle or fall back to an all-Alt rewrite.
 
-Dual-binding everything to `Mod1` (Alt) unconditionally *would* work for
-ChromeOS, but on Mac/iPad/Linux clients it clobbers common app shortcuts
-(Alt+Tab, Alt+Return, Alt+Ctrl+N…). So the detector does it **conditionally**:
-only when the currently-connected CRD client is ChromeOS.
+With **"Send system keys" on** (the recommended mode) most of Super passes
+through, but ChromeOS *still* intercepts a small set of chords for its own
+shelf/overview/lock UI — notably `Super+Tab`, `Super+L`, `Super+Arrow`.
+The detector's job is narrow: for just those chords, emit `Ctrl+Super+<key>`
+alternatives. `Ctrl+Super` is essentially unused by ChromeOS so it passes
+through reliably, and we don't touch the rest of the bindings, so Mac /
+iPad / Linux clients see no extra shortcuts at all.
+
+The collision list lives at the top of `crd-client-detector.py`
+(`CHROMEOS_COLLISION_KEYS`). Add a key name there, or drop your own
+`bindsym $mod+Ctrl+<key> ...` line into `~/.config/i3/conf.d/local.conf`,
+if you hit a chord ChromeOS eats that isn't already covered.
 
 ## Install
 
@@ -60,8 +68,9 @@ font size, gaps, distro-specific portal path.
 One important exception: i3 variables (`$mod`, `$ws1`, etc.) are substituted
 **at parse time where they're referenced**, so redefining `$mod` in a
 late-included file will not retroactively change bindings that were already
-parsed above. That's why the CRD detector emits fully expanded `bindsym Mod1+…`
-lines instead of just redefining `$mod`.
+parsed above. That's why the CRD detector emits concrete `bindsym $mod+Ctrl+<key> …`
+lines (which i3 then resolves to `Mod4+Control+<key>`) rather than trying to
+swap the `$mod` alias in flight.
 
 ## How the CRD detector works
 
@@ -84,9 +93,11 @@ lines instead of just redefining `$mod`.
                        │
          ┌─────────────▼──────────────┐   ┌──────────────▼──────────────┐
          │ ~/.config/i3/conf.d/        │   │ ~/.config/i3/conf.d/         │
-         │ crd-mod.conf = Mod1 copies  │   │ crd-mod.conf = empty comment │
-         │ of every top-level          │   │ (default Mod4 is fine)       │
-         │ `bindsym $mod …` line       │   └──────────────────────────────┘
+         │ crd-mod.conf = `bindsym     │   │ crd-mod.conf = empty comment │
+         │ $mod+Ctrl+<key> …` for      │   │ (default Mod4 is fine)       │
+         │ Tab, L, Arrows (the chords  │   └──────────────────────────────┘
+         │ ChromeOS captures even      │
+         │ with Send-system-keys on)   │
          └─────────────┬──────────────┘
                        │ i3-msg reload + notify-send toast
                        ▼
@@ -129,19 +140,29 @@ i3-msg restart   # restart, not reload — exec_always only re-fires on restart 
 
 ## ChromeOS gotchas
 
-The detector makes `$mod` shortcuts work, but a few chords are additionally
-swallowed by the ChromeOS client itself, before Alt can reach i3:
+Enable **"Send system keys"** / **"Pass system keys"** in the CRD ChromeOS
+client's side panel — without it, Super itself is swallowed and none of the
+detector's logic matters. Assume it's on for everything below.
 
-| Key | What ChromeOS does with it | Workaround |
-|-----|----------------------------|------------|
-| `Alt+Tab` | Chrome OS window switcher | Add a different shortcut for rofi window-switch in `conf.d/local.conf`, e.g. `bindsym Mod1+grave exec rofi -show window` |
-| `Alt+Ctrl+<n>` | Switches virtual desktops on ChromeOS | Consider remapping the "move-and-follow" chord |
-| `Alt+Shift+q` | Usually fine — reaches i3 as `kill` | — |
-| `Alt+Return` | Usually fine — reaches i3 as terminal spawn | — |
+Even with Send-keys on, these Super chords still get eaten before reaching
+the remote. Use the Ctrl+Super fallbacks the detector emits (or add more):
 
-In the Chrome Remote Desktop client, toggle **"Send keyboard shortcuts"** on
-if you want ChromeOS keys like the Launcher to be forwarded — but even with
-this on, `Alt+Tab` is still captured.
+| Chord that fails | What ChromeOS does | Detector's fallback |
+|------------------|---------------------|---------------------|
+| `Super+Tab` | Overview / window switcher | `Super+Ctrl+Tab` → rofi window-switch |
+| `Super+L` | Lock screen (hard-captured) | `Super+Ctrl+L` → `focus up` |
+| `Super+Left/Right/Up/Down` | Window snap / virtual desk nav | `Super+Ctrl+<arrow>` → `focus <dir>` |
+
+`Shift+Super` is *less* safe than `Ctrl+Super` — recent ChromeOS builds use
+`Shift+Super+M`, `Shift+Super+L`, etc. Stick to Ctrl+Super for fallbacks.
+
+To add more fallbacks, append the key to `CHROMEOS_COLLISION_KEYS` at the top
+of `crd-client-detector.py` and restart the daemon, or drop a line directly
+into `~/.config/i3/conf.d/local.conf`:
+
+```
+bindsym $mod+Ctrl+<key> <action>
+```
 
 ## Detection reliability
 
@@ -164,7 +185,7 @@ toggle hotkey.
 
 | Symptom | Check |
 |---------|-------|
-| Shortcuts still don't work on ChromeOS | `cat ~/.config/i3/conf.d/crd-mod.conf` — expect Mod1 bindings. If empty, `cat ~/.cache/i3-crd-client.log`. |
+| Shortcuts still don't work on ChromeOS | `cat ~/.config/i3/conf.d/crd-mod.conf` — expect `bindsym $mod+Ctrl+<key> …` lines for Tab/L/Arrows. If empty, `cat ~/.cache/i3-crd-client.log`. Also confirm **"Send system keys"** is ON in the CRD client. |
 | Daemon not running | `ps -ef \| grep crd-client-detector`. If missing, `i3-msg restart` (not `reload` — exec_always only re-fires on restart in 4.23). |
 | Want to force re-detection | See "Starting fresh" above. |
 | Changes to `config` aren't live | Re-run `./install.sh` — the live file is a copy, not a symlink. |

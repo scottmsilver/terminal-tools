@@ -1,6 +1,6 @@
 # i3 Tools
 
-Utilities for managing an i3wm + WezTerm desktop environment. Includes a versioned i3 config with per-machine overrides, AI-powered workspace naming, DPI switching for laptop/desktop modes, workspace recovery after CRD reconnects, status bar enhancements, and a Chrome-Remote-Desktop client-OS detector that retunes keybindings when the client is a Chromebook.
+Utilities for managing an i3wm + WezTerm desktop environment. Includes a versioned i3 config with per-machine overrides, AI-powered workspace naming, DPI switching for laptop/desktop modes, workspace recovery after CRD reconnects, status bar enhancements, and a Chrome-Remote-Desktop client-OS detector that adds Ctrl+Super fallbacks for the handful of shortcuts ChromeOS captures (Super+Tab, Super+L, Super+Arrows) even with "Send system keys" enabled.
 
 ## Quick start
 
@@ -24,10 +24,11 @@ See [`i3/README.md`](i3/README.md) for the full i3-config + CRD detector story. 
 ### `i3/` — i3 config + CRD client-OS detector
 
 The versioned i3 config, a `conf.d/` override pattern for per-machine
-settings, and a daemon that rebinds `$mod` shortcuts to Alt when the Chrome
-Remote Desktop client is a Chromebook (ChromeOS swallows the Super key
-client-side, breaking Mod4-based shortcuts). Install via `i3/install.sh`.
-Full details in [`i3/README.md`](i3/README.md).
+settings, and a daemon that watches the Chrome Remote Desktop journal and
+— when the connected client is a Chromebook — adds `Ctrl+Super+<key>`
+fallbacks for the narrow set of chords ChromeOS still captures even with
+"Send system keys" enabled (Super+Tab, Super+L, Super+Arrows). Install via
+`i3/install.sh`. Full details in [`i3/README.md`](i3/README.md).
 
 ### `workspace_namer.py` — AI Workspace Namer
 
@@ -38,6 +39,12 @@ Renames i3 workspaces based on their content by shelling out to the `gemini` CLI
 ```
 
 Invoked by the polybar ✨ button. No arguments; always names all active workspaces. Errors surface via `notify-send`.
+
+> **If the ✨ button does nothing:** polybar swallows stderr from click-handlers, so the notify-send toast won't fire on import errors. Run `~/scripts/workspace_namer.py` directly from a terminal to see the traceback. The most common failure is `ModuleNotFoundError: No module named 'i3ipc'` — the script's `#!/usr/bin/env python3` shebang resolves to whichever `python3` is first on PATH (often anaconda), which needs the deps explicitly installed:
+>
+> ```bash
+> pip3 install i3ipc requests
+> ```
 
 ### `set_dpi.sh` — DPI / Font Switcher
 

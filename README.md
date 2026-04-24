@@ -6,7 +6,7 @@ Utilities for managing a remote Linux development environment accessed via Chrom
 
 ### [`i3-tools/`](i3-tools/)
 
-i3wm + WezTerm desktop toolkit. Versioned i3 config with `conf.d/` per-machine overrides, AI-powered workspace naming, DPI calibration for multi-device CRD access, workspace recovery after reconnects, window origin tracking, status bar enhancements, and a Chrome-Remote-Desktop client-OS detector that rebinds `$mod` shortcuts to Alt when the client is a Chromebook (ChromeOS eats the Super key).
+i3wm + WezTerm desktop toolkit. Versioned i3 config with `conf.d/` per-machine overrides, AI-powered workspace naming, DPI calibration for multi-device CRD access, workspace recovery after reconnects, window origin tracking, status bar enhancements, and a Chrome-Remote-Desktop client-OS detector that adds Ctrl+Super fallbacks for the handful of shortcuts ChromeOS captures (Super+Tab, Super+L, Super+Arrows) even with "Send system keys" enabled.
 
 ### [`apk-remote-install/`](apk-remote-install/)
 
