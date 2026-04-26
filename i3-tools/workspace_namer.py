@@ -15,10 +15,16 @@ from typing import Any
 
 import i3ipc
 
-GEMINI_TIMEOUT_SECONDS = 45
+GEMINI_MODEL = "gemini-3.1-pro-preview"  # best naming quality; flash is faster but coarser
+GEMINI_TIMEOUT_SECONDS = 180  # 3.1-pro-preview can take 60-150s on a thinking pass
 PANE_SCROLLBACK_LINES = 50
 PANE_TEXT_CAP_CHARS = 4000
-SANITIZED_NAME_MAX = 20
+# Target visual width for the workspace name (after the "N: " prefix). Polybar
+# tab pills get cramped above this, and the human eye can recognize a short
+# devoweled abbreviation about as fast as the full word — see Cambridge
+# scrambled-text studies. We treat this as soft: the LLM is asked to aim for
+# it, and smart_truncate() guarantees the final name fits.
+NAME_TARGET_CHARS = 10
 
 
 class NamerError(Exception):
@@ -133,8 +139,59 @@ def _pane_cwd(pane: dict[str, Any]) -> str | None:
     return cwd or None
 
 
+def _is_wezterm_class(cls: str | None) -> bool:
+    c = (cls or "").lower()
+    return c.startswith("org.wezfurlong") or "wezterm" in c
+
+
+def _match_pane_for_leaf(
+    leaf_title: str,
+    panes: list[dict[str, Any]],
+    used: set[int],
+) -> dict[str, Any] | None:
+    """Find a not-yet-claimed wezterm pane whose title is contained in this leaf's title."""
+    if not leaf_title:
+        return None
+    for p in panes:
+        pid = p.get("pane_id")
+        if pid in used:
+            continue
+        ptitle = p.get("title")
+        if ptitle and ptitle in leaf_title:
+            return p
+    return None
+
+
+def _panes_in_same_window(
+    seed: dict[str, Any],
+    panes: list[dict[str, Any]],
+    used: set[int],
+) -> list[dict[str, Any]]:
+    """Return every not-yet-claimed pane sharing the seed's wezterm OS-window.
+
+    A wezterm OS-window typically contains many tabs and panes; matching one
+    pane by title (the one whose title bubbles up to the X11 window manager)
+    unlocks the rest of the window's tabs/panes for context. Without this,
+    we'd only see the focused pane and miss everything in the other tabs of
+    the same workspace's wezterm.
+    """
+    wid = seed.get("window_id")
+    if wid is None:
+        # Fall back to just the seed pane if wezterm didn't expose window_id.
+        return [seed] if seed.get("pane_id") not in used else []
+    out: list[dict[str, Any]] = []
+    for p in panes:
+        if p.get("window_id") != wid:
+            continue
+        pid = p.get("pane_id")
+        if not isinstance(pid, int) or pid in used:
+            continue
+        out.append(p)
+    return out
+
+
 def gather_context(i3: i3ipc.Connection) -> dict[int, dict[str, Any]]:
-    """Per-workspace: current name, window classes/titles, best-effort wezterm text + git repo."""
+    """Per-workspace: current name, window classes/titles, list of wezterm panes."""
     tree = i3.get_tree()
     panes = _wez_list()
     focused_pane_id = _wez_focused_pane_id()
@@ -151,36 +208,63 @@ def gather_context(i3: i3ipc.Connection) -> dict[int, dict[str, Any]]:
         classes = sorted({l.window_class for l in leaves if l.window_class})
         titles = [l.name for l in leaves if l.name]
 
-        chosen_pane: dict[str, Any] | None = None
-        has_wezterm = any(
-            (c or "").lower().startswith("org.wezfurlong") or "wezterm" in (c or "").lower() for c in classes
-        )
-        if has_wezterm:
-            for title in titles:
-                for p in panes:
-                    pid = p.get("pane_id")
-                    if pid in used_pane_ids:
-                        continue
-                    if p.get("title") and title and p["title"] in title:
-                        chosen_pane = p
-                        break
-                if chosen_pane:
-                    break
-            # Only the focused workspace may consume the globally focused pane
-            # as a fallback. Otherwise the first workspace iterated (usually
-            # workspace 1) would steal scrollback from whichever workspace the
-            # user is actually in.
-            if not chosen_pane and getattr(ws, "focused", False) and focused_pane_id not in used_pane_ids:
-                chosen_pane = next((p for p in panes if p.get("pane_id") == focused_pane_id), None)
-
-        wezterm_text = ""
-        git_repo = None
-        if chosen_pane:
-            pid = chosen_pane.get("pane_id")
-            if isinstance(pid, int):
+        # Collect text from EVERY wezterm pane in this workspace, including
+        # all tabs/panes inside each wezterm OS-window — not just the focused
+        # pane whose title bubbles up to i3. A workspace running tests in pane
+        # 1, a server in pane 2, and editing in pane 3 needs context from all
+        # three; the focused-pane title alone is misleading.
+        wezterm_panes: list[dict[str, Any]] = []
+        git_repos: list[str] = []
+        for leaf in leaves:
+            if not _is_wezterm_class(leaf.window_class):
+                continue
+            seed = _match_pane_for_leaf(leaf.name or "", panes, used_pane_ids)
+            if not seed:
+                continue
+            for p in _panes_in_same_window(seed, panes, used_pane_ids):
+                pid = p.get("pane_id")
+                if not isinstance(pid, int):
+                    continue
                 used_pane_ids.add(pid)
-                wezterm_text = _wez_pane_text(pid)
-            git_repo = _git_repo_name(_pane_cwd(chosen_pane))
+                text = _wez_pane_text(pid)
+                repo = _git_repo_name(_pane_cwd(p))
+                wezterm_panes.append(
+                    {
+                        "title": p.get("title") or "",
+                        "text": text,
+                        **({"git_repo": repo} if repo else {}),
+                    }
+                )
+                if repo:
+                    git_repos.append(repo)
+
+        # Focused-workspace fallback: if title matching missed every wezterm
+        # leaf (which happens during shell startup before wezterm has set a
+        # title), grab the globally focused pane so we still produce useful
+        # context for the workspace the user is actually looking at. This may
+        # only fire once and only on the focused workspace — otherwise the
+        # first workspace iterated would steal it.
+        if (
+            not wezterm_panes
+            and any(_is_wezterm_class(c) for c in classes)
+            and getattr(ws, "focused", False)
+            and focused_pane_id is not None
+            and focused_pane_id not in used_pane_ids
+        ):
+            chosen = next((p for p in panes if p.get("pane_id") == focused_pane_id), None)
+            if chosen:
+                used_pane_ids.add(focused_pane_id)
+                text = _wez_pane_text(focused_pane_id)
+                repo = _git_repo_name(_pane_cwd(chosen))
+                wezterm_panes.append(
+                    {
+                        "title": chosen.get("title") or "",
+                        "text": text,
+                        **({"git_repo": repo} if repo else {}),
+                    }
+                )
+                if repo:
+                    git_repos.append(repo)
 
         # Strip the "N:" prefix from the workspace name so the model sees only
         # the human-chosen intent. Otherwise the model can "preserve" the whole
@@ -191,20 +275,86 @@ def gather_context(i3: i3ipc.Connection) -> dict[int, dict[str, Any]]:
             "current_name": current_intent,
             "window_classes": classes,
             "window_titles": titles[:8],
-            "git_repo": git_repo,
-            "wezterm_text": wezterm_text,
+            "git_repos": list(dict.fromkeys(git_repos)),  # dedup, preserve order
+            "wezterm_panes": wezterm_panes,
         }
     return ctx
 
 
 def build_prompt(contexts: dict[int, dict[str, Any]]) -> str:
     body = {str(k): v for k, v in contexts.items()}
+    n = NAME_TARGET_CHARS
     return (
-        "You are naming i3 workspaces. For each workspace below, propose ONE short "
-        "name (1-3 words, lowercase, no emoji, no punctuation other than dashes) "
-        "that describes what is happening in it. Preserve a short existing name if "
-        "it still fits the content. Return ONLY a JSON object mapping workspace_number "
-        "(string) to name (string). No prose, no code fences.\n\n"
+        f"You are naming i3 workspaces for a developer's tab bar. For each "
+        f"workspace, propose ONE name ≤{n} characters that someone glancing at "
+        f"the tab can match to the underlying project at a glance.\n\n"
+        f"WHY THIS WORKS: English readers don't decode words letter-by-letter. "
+        f"They use word shape, leading characters, and the consonant skeleton. "
+        f'Vowels carry less information than consonants — "cnsnnts crry mst f '
+        f'th sgnl" stays readable. So when compression is needed, dropping '
+        f"vowels (especially interior ones) preserves recognizability while "
+        f"shortening. Word-initial letters are most load-bearing; protect them. "
+        f"Trailing letters help too. Middle vowels are nearly free to drop. "
+        f"Drop a vowel only when needed to fit the budget — never preemptively, "
+        f"because every dropped letter is a small cost paid in reading effort.\n\n"
+        f"CORE PRINCIPLES (apply in this priority order, top wins):\n"
+        f"  P1. SPECIFICITY: the name must distinguish this workspace from a "
+        f"hypothetical other workspace doing similar work. Generic English "
+        f'nouns ("pool", "test", "main", "config", "namer") are '
+        f"uninformative when used alone — even if the user previously chose "
+        f"them. Always prefer a project/repo-derived name over a current_name "
+        f"that is a bare common noun.\n"
+        f"  P2. MINIMUM COMPRESSION: never drop letters you don't need to drop. "
+        f"If a real readable token fits the {n}-char budget verbatim, use it "
+        f"verbatim. Devoweling is a last resort to win characters back, not a "
+        f"stylistic choice.\n"
+        f"  P3. BREVITY: among recognizable forms, prefer the shorter one. "
+        f"If a 6-char form and a 10-char form both read clearly, the 6-char "
+        f"one wins — tab labels reward brevity. Don't pad to fill the budget. "
+        f"Brevity does NOT override P1: a short generic noun still loses to a "
+        f"longer specific name.\n\n"
+        f"DECISION CASCADE — try each in order, take the first that produces a "
+        f"name ≤{n} chars:\n"
+        f"  1. The most specific source string (project repo name, app name, "
+        f"clearly-named tool).\n"
+        f"  2. The same string with separator dashes removed.\n"
+        f"  3. The single most distinctive token from that string.\n"
+        f"  4. Combine the most specific token with one extra distinguishing "
+        f"word (compress one segment, keep the other readable).\n"
+        f"  5. Devowel: drop interior vowels but keep the first letter of each "
+        f"word; keep all consonants. Preserve dashes if they aid readability.\n"
+        f"  6. Devowel + drop dashes.\n"
+        f'  7. Last resort: "first…last" with U+2026 ellipsis.\n\n'
+        f"EXAMPLES (illustrative — apply the cascade to the actual data, not "
+        f"these literal strings):\n"
+        f'  source "x-y" (3)               →  "x-y"               '
+        f"(already short, pass through)\n"
+        f'  source "alpha-beta" (10)       →  "alpha-beta"        '
+        f"(fits; do NOT devowel)\n"
+        f'  source "alpha-beta" (10)       →  NOT "alph-beta"     '
+        f"(same length, less readable — violates P2)\n"
+        f'  source "deployment-runner" (17)→  "dply-rnr"          '
+        f"(must compress; consonants + dash survive)\n"
+        f'  source "deployment" alone      →  "deploy"            '
+        f'(preserve recognizable real word over "dplymnt")\n'
+        f'  current_name "main" + repo "foo-bar" → "foo-bar"        '
+        f"(P1: a generic current_name loses to a specific repo name)\n\n"
+        f"GENERAL RULES:\n"
+        f"- Lowercase only; dashes are the only allowed punctuation; no emoji "
+        f"or other symbols.\n"
+        f"- PASS THROUGH already-short identifiers (≤{n} chars and recognizable "
+        f"as a name) unchanged.\n"
+        f"- Preserve current_name ONLY if it is BOTH specific (not a bare "
+        f"common noun) AND ≤{n} chars.\n\n"
+        f"CONTEXT WEIGHTING:\n"
+        f"  1. git_repos — strongest signal; the project the developer is "
+        f"working in.\n"
+        f"  2. wezterm_panes[].title and pane text — activity inside the "
+        f"project.\n"
+        f"  3. window_titles — noisy fallback.\n"
+        f"  4. current_name — only if it satisfies P1 (specific).\n\n"
+        f"Return ONLY a JSON object mapping workspace_number (string) to name "
+        f"(string). No prose, no code fences.\n\n"
         f"Workspaces:\n{json.dumps(body, ensure_ascii=False)}"
     )
 
@@ -247,7 +397,7 @@ def ask_gemini(prompt: str) -> str:
     env["PATH"] = os.path.dirname(binary) + os.pathsep + env.get("PATH", "")
     try:
         res = subprocess.run(
-            [binary, "-p", prompt, "-o", "text", "--approval-mode", "plan"],
+            [binary, "-p", prompt, "-m", GEMINI_MODEL, "-o", "text", "--approval-mode", "plan"],
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,
@@ -285,12 +435,75 @@ def parse_response(stdout: str) -> dict[str, str]:
     return out
 
 
+def _devowel_word(word: str) -> str:
+    """Drop interior vowels (a/e/i/o/u) while keeping the first letter.
+
+    Humans recover devoweled words quickly because consonants carry most of
+    the information ("cnsnnts crry mst f th nfrmtn"). We always preserve the
+    very first character so the word's leading sound stays intact, which is
+    what your eye anchors on.
+    """
+    if len(word) <= 2:
+        return word
+    return word[0] + re.sub(r"[aeiou]", "", word[1:])
+
+
+def smart_truncate(name: str, max_chars: int = NAME_TARGET_CHARS) -> str:
+    """Compress *name* to ≤max_chars, preserving recognizability.
+
+    Cascade (try in order, take the first that fits):
+      1. As-is.
+      2. Drop separator dashes (joins compound words).
+      3. Devowel each segment, keep dashes.
+      4. Devowel each segment, drop dashes.
+      5. Ellipsis (U+2026, 1 visual char): for compound names we keep
+         "first…last" so both ends remain readable; for a single word we
+         truncate the tail with a trailing ellipsis.
+    """
+    n = (name or "").strip()
+    if len(n) <= max_chars:
+        return n
+
+    # 2. Drop dashes.
+    no_dash = n.replace("-", "")
+    if len(no_dash) <= max_chars:
+        return no_dash
+
+    # 3. Devowel each dash-separated segment.
+    parts = [p for p in n.split("-") if p]
+    devoweled = "-".join(_devowel_word(p) for p in parts)
+    if len(devoweled) <= max_chars:
+        return devoweled
+
+    # 4. Devowel + drop dashes.
+    no_dash_dev = devoweled.replace("-", "")
+    if len(no_dash_dev) <= max_chars:
+        return no_dash_dev
+
+    # 5. Ellipsis. For multi-word names, keep the head of the first segment
+    # and the tail of the last segment — that pattern reads as "this thing
+    # in the middle of <first>…<last>" rather than just "starts with…".
+    if len(parts) >= 2:
+        budget = max_chars - 1  # ellipsis takes 1 visual char
+        first_keep = max(1, budget // 2)
+        last_keep = max(1, budget - first_keep)
+        candidate = parts[0][:first_keep] + "…" + parts[-1][-last_keep:]
+        if len(candidate) <= max_chars:
+            return candidate
+
+    # Single-word fallback: head + ellipsis.
+    return no_dash_dev[: max_chars - 1] + "…"
+
+
 def sanitize(name: str) -> str:
     s = (name or "").strip().lower()
     s = re.sub(r"\s+", "-", s)
-    s = re.sub(r"[^a-z0-9-]", "", s)
+    # Allow lowercase letters, digits, dashes, and the U+2026 ellipsis
+    # character that smart_truncate may inject downstream — strip everything
+    # else (emoji, punctuation, accents, etc.).
+    s = re.sub(r"[^a-z0-9\-…]", "", s)
     s = re.sub(r"-+", "-", s).strip("-")
-    return s[:SANITIZED_NAME_MAX]
+    return smart_truncate(s, NAME_TARGET_CHARS)
 
 
 def robust_rename(i3: i3ipc.Connection, ws_num: int, proposed: str) -> str:
@@ -336,22 +549,83 @@ def summarize(applied: list[tuple[int, str, str]]) -> str:
     return "\n".join(new for _num, _old, new in applied)
 
 
-def main() -> int:
+def _print_section(title: str, body: str) -> None:
+    print("=" * 60)
+    print(title)
+    print("=" * 60)
+    print(body)
+
+
+def main(argv: list[str]) -> int:
+    # Three modes:
+    #   default     — gather, call gemini, apply renames (what polybar's
+    #                 ✨ button invokes).
+    #   --dry-run   — gather only; print context + prompt and stop. No API
+    #                 call, no rename. Use for fast iteration on the prompt
+    #                 or context shape.
+    #   --no-apply  — gather + call gemini and print everything (context,
+    #                 prompt, raw response, sanitized name table) but do not
+    #                 rename anything. Use for previewing what the namer
+    #                 would do before letting it touch your workspaces.
+    dry_run = "--dry-run" in argv
+    no_apply = "--no-apply" in argv
+    cli_mode = dry_run or no_apply
     try:
-        notify("workspace-namer", "Naming workspaces with Gemini…")
         i3 = i3ipc.Connection()
         ctx = gather_context(i3)
         if not ctx:
-            notify("workspace-namer", "No active workspaces to name.")
+            if cli_mode:
+                print("(no active workspaces)", file=sys.stderr)
+            else:
+                notify("workspace-namer", "No active workspaces to name.")
             return 0
+
         prompt = build_prompt(ctx)
+
+        if cli_mode:
+            _print_section(
+                "GATHERED CONTEXT (per workspace)",
+                json.dumps({str(k): v for k, v in ctx.items()}, indent=2, ensure_ascii=False),
+            )
+            print()
+            _print_section("PROMPT SENT TO GEMINI" if no_apply else "PROMPT THAT WOULD BE SENT TO GEMINI", prompt)
+            print()
+
+        if dry_run:
+            return 0
+
+        if not cli_mode:
+            notify("workspace-namer", "Naming workspaces with Gemini…")
         stdout = ask_gemini(prompt)
         proposed = parse_response(stdout)
+
+        if cli_mode:
+            _print_section("RAW GEMINI RESPONSE", stdout.strip())
+            print()
+            # Show what apply_names() WOULD do, including any post-truncation
+            # via sanitize() / smart_truncate(). That way the preview matches
+            # the exact rename text we'd send to i3.
+            current_names = {w.num: w.name for w in i3.get_workspaces()}
+            preview = []
+            for num_str, raw in proposed.items():
+                try:
+                    ws_num = int(num_str)
+                except ValueError:
+                    continue
+                cleaned = sanitize(raw)
+                old = current_names.get(ws_num, "(unknown)")
+                preview.append(f"  {ws_num}: {old!r:30} -> {cleaned!r} ({len(cleaned)} chars)")
+            _print_section("PROPOSED RENAMES (sanitized; not applied)", "\n".join(preview))
+            return 0
+
         applied = apply_names(i3, proposed)
         notify("workspace-namer", summarize(applied))
         return 0
     except NamerError as e:
-        notify("workspace-namer", f"Error: {e}", urgency="critical")
+        if cli_mode:
+            print(f"Error: {e}", file=sys.stderr)
+        else:
+            notify("workspace-namer", f"Error: {e}", urgency="critical")
         return 1
 
 
@@ -360,4 +634,4 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding="utf-8")
     except AttributeError:
         pass
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

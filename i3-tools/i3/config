@@ -254,6 +254,13 @@ bindsym $mod+apostrophe exec i3-input -F '[con_mark="%s"] focus' -l 1 -P 'Go to:
 # Clipboard manager (parcellite)
 exec --no-startup-id parcellite --no-icon
 
+# vncconfig bridges the host's X selections (PRIMARY/CLIPBOARD) to/from the
+# RFB protocol so direct VNC clients (e.g. Mac Screen Sharing connecting to
+# Xtigervnc on :5901) get working two-way copy/paste. Without it, copy/paste
+# silently fails — the i3 session has no idea VNC is asking for the clipboard.
+# `-nowin` runs it as a hidden helper instead of opening its config window.
+exec --no-startup-id vncconfig -nowin
+
 # Per-machine overrides. Included LAST so local.conf wins over the repo defaults
 # above. Drop *.conf files into ~/.config/i3/conf.d/ to override fonts, gaps,
 # portal paths, bindings, or anything else. See conf.d/local.conf.example for
