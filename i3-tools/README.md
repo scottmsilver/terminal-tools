@@ -30,15 +30,30 @@ fallbacks for the narrow set of chords ChromeOS still captures even with
 "Send system keys" enabled (Super+Tab, Super+L, Super+Arrows). Install via
 `i3/install.sh`. Full details in [`i3/README.md`](i3/README.md).
 
-### `workspace_namer.py` — AI Workspace Namer
+### `workspace_namer.py` — AI Workspace Namer (text-only)
 
 Renames i3 workspaces based on their content by shelling out to the `gemini` CLI. Gathers WezTerm terminal text, git metadata, and X11 window classes/titles per workspace, sends one prompt, and applies the returned names.
 
 ```bash
-./workspace_namer.py
+./workspace_namer.py             # gather + call gemini + apply
+./workspace_namer.py --no-apply  # gather + call gemini, print preview, no rename
+./workspace_namer.py --dry-run   # gather only; print prompt, no API call
 ```
 
-Invoked by the polybar ✨ button. No arguments; always names all active workspaces. Errors surface via `notify-send`.
+No arguments by default; always names all active workspaces. Names are clamped to ≤10 chars by `smart_truncate()` (cascade: as-is → drop dashes → devowel → ellipsis). Errors surface via `notify-send`.
+
+### `workspace_namer_vision.py` — Hybrid (text + vision) namer
+
+Augments the text-based namer with a screenshot of each workspace, sent to gemini's multimodal model. Useful when the workspace's identity isn't fully captured in scrollback — browser tabs, GUI app state, IDE filename bars, etc. Briefly cycles through every workspace to capture each (~200 ms per workspace, returns to the originally-focused one). Imports `workspace_namer` for `gather_context()` and `sanitize()` so all the text-side logic stays in one place.
+
+```bash
+./workspace_namer_vision.py             # gather text + screenshots + call gemini + apply
+./workspace_namer_vision.py --no-apply  # preview only
+```
+
+Each workspace gets THREE candidate names spanning different axes (project / activity / screenshot-derived) plus a single `best` pick which is what actually gets applied. Screenshots cached in `agent-tools/.cache/ws-shots/` (gitignored). The polybar ✨ button is wired to this hybrid script — clicking N runs the full text+vision pipeline.
+
+Why hybrid: vision-alone misreads workspaces because the dominant on-screen content is whatever the user was actively reading (often an AI chat session), not what the workspace is "about". Text-alone misses signals only the screen carries. Combining lets each compensate for the other's blind spot.
 
 > **If the ✨ button does nothing:** polybar swallows stderr from click-handlers, so the notify-send toast won't fire on import errors. Run `~/scripts/workspace_namer.py` directly from a terminal to see the traceback. The most common failure is `ModuleNotFoundError: No module named 'i3ipc'` — the script's `#!/usr/bin/env python3` shebang resolves to whichever `python3` is first on PATH (often anaconda), which needs the deps explicitly installed:
 >
